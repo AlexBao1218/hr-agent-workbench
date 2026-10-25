@@ -175,6 +175,8 @@ export function AgentWorkbench() {
     );
   const diff = changes(state.active, draft),
     selected = draft.roles[role];
+  const outputLimit = Math.min(65536, state.runtime.maxOutputTokens);
+  const outputLimitMessage = `超过服务器输出上限（${outputLimit} token），这是服务器限制，不是模型上限。`;
   const selectedRules = state.lockedRulesByRole?.[role] ?? state.lockedRules;
   const effectivePromptPreview =
     selectedRules + "Active role: " + role + "\n" + selected.systemPrompt;
@@ -295,6 +297,7 @@ export function AgentWorkbench() {
               className="aw-panel"
               onSubmit={(e) => {
                 e.preventDefault();
+                if (roles.some(r => draft.roles[r].maxOutputTokens > outputLimit)) { setError(outputLimitMessage); return; }
                 void mutate(
                   "draft",
                   "PUT",
@@ -368,11 +371,17 @@ export function AgentWorkbench() {
                     min={1}
                     step={1}
                     required
+                    max={outputLimit}
+                    aria-describedby="aw-output-limit"
                     value={selected.maxOutputTokens}
-                    onChange={(e) =>
-                      update("maxOutputTokens", Number(e.target.value))
-                    }
+                    onInvalid={e => { if (e.currentTarget.validity.rangeOverflow) e.currentTarget.setCustomValidity(outputLimitMessage); }}
+                    onChange={(e) => {
+                      e.target.setCustomValidity("");
+                      update("maxOutputTokens", Number(e.target.value));
+                    }}
                   />
+                  <small id="aw-output-limit">服务器输出上限 {outputLimit} token；服务器输入容量 {state.runtime.maxInputBytes ?? "未设置"} bytes（只读）。</small>
+                  {selected.maxOutputTokens > outputLimit && <small role="alert">{outputLimitMessage}</small>}
                 </label>
                 <label>
                   Temperature（留空使用默认）
@@ -734,7 +743,7 @@ export function AgentWorkbench() {
               {state.runtime.model || "未配置"}
             </p>
             <p>
-              默认输出上限 {state.runtime.maxOutputTokens} token · 输入上限{" "}
+              服务器输出上限 {outputLimit} token · 服务器输入容量（只读）{" "}
               {state.runtime.maxInputBytes ?? "未设置"} 字节 · 调用预算{" "}
               {state.runtime.maxCalls ?? "未设置"} 次 · 默认超时{" "}
               {state.runtime.timeoutSeconds} 秒

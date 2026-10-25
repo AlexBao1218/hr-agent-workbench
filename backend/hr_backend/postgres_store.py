@@ -19,6 +19,10 @@ class RemoteStoreError(RuntimeError):
     pass
 
 
+class WriterBusyError(RemoteStoreError):
+    """The session lock is held by a prior instance; no state was changed."""
+
+
 class PostgresStore:
     is_remote = True
     WRITER_LOCK = 0x485241495753
@@ -45,7 +49,7 @@ class PostgresStore:
                                       options='-c statement_timeout=30000 -c lock_timeout=10000',
                                       tcp_user_timeout=30000)
             if not self.db.execute('SELECT pg_try_advisory_lock(%s)', (self.WRITER_LOCK,)).fetchone()[0]:
-                raise RemoteStoreError('Remote workspace already has an active writer. Stop that process before starting another.')
+                raise WriterBusyError('Remote workspace already has an active writer. Waiting for graceful handoff is required.')
             # Deliberately never creates schema. Bootstrap is a separate explicit step.
             with self.sql_transaction() as cursor:
                 cursor.execute('SELECT body FROM hr_private.workspace WHERE id=1 FOR UPDATE')

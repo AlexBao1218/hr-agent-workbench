@@ -33,7 +33,7 @@ import { FilterSelect, UploadDialog } from "./UIControls";
 import { HrReviewEditor, hrDecisionLabels } from "./HrReviewEditor";
 import { StandardsList } from "./StandardsList";
 import { useDocumentGestures } from "./useDocumentGestures";
-import { RunProgress, CandidateRunProgress, hasCandidateProgress } from "./RunProgress";
+import { RunProgress, CandidateRunProgress, hasCandidateProgress, isInputLimitError, runErrorMessage } from "./RunProgress";
 const grades = {
   A: "建议立即约面",
   B: "可备选",
@@ -1249,9 +1249,9 @@ function Detail({
       </div>
       {(c.error || doc.status !== "ready") && (
         <div className="notice error">
-          {c.error ||
+          {c.error && isInputLimitError(c.error) ? runErrorMessage(c.error) : <>{c.error ||
             `原文状态：${doc.status === "needs_ocr" ? "需要 OCR" : "读取失败"}`}
-          。无法读取的资料保持待处理，不等于不匹配。
+          。无法读取的资料保持待处理，不等于不匹配。</>}
         </div>
       )}
       {a?.status !== "current" && (

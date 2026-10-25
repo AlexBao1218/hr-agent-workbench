@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { CandidateCard, Run, RunStep } from '../../contracts/api';
 
+export const isInputLimitError = (error: string) => /\binput_limit\b|HR_MODEL_MAX_INPUT_BYTES/.test(error);
 export function runErrorMessage(error: string) {
+  if (isInputLimitError(error)) return "本次分析内容超过系统输入容量，未发送给模型；简历已保留。";
   if (/\bbudget_exhausted\b/.test(error)) return '已达到本地调用次数上限，本次分析未完成。';
   return /\binvalid_interview_evidence\b/.test(error) ? '面试问题的引用检查未通过' : error;
 }

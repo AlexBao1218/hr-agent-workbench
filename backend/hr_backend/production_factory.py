@@ -45,7 +45,7 @@ class FrontendFiles(StaticFiles):
             return await super().get_response('index.html', scope)
 
 
-def create_production_app(*, environ=None, provider=None):
+def validate_production_config(environ=None):
     env = os.environ if environ is None else environ
     username, password = env.get('HR_ACCESS_USER', ''), env.get('HR_ACCESS_PASSWORD', '')
     if not username.strip() or not password.strip() or ':' in username:
@@ -63,6 +63,11 @@ def create_production_app(*, environ=None, provider=None):
     except ValueError:
         raise RuntimeError('HR_ALLOWED_ORIGINS must contain comma-separated HTTP(S) origins') from None
 
+    return env, data_dir, dist, username, password, allowed
+
+
+def create_production_app(*, environ=None, provider=None):
+    env, data_dir, dist, username, password, allowed = validate_production_config(environ)
     # Import only after deployment configuration is validated; no local data fallback.
     from .app import create_app
     app = create_app(data_dir=data_dir, provider=provider, storage_config=env)

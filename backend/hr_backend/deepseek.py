@@ -119,8 +119,9 @@ class DeepSeekProvider(OpenAIProvider):
         else:arguments.pop('temperature',None)
         from openai.lib._pydantic import to_strict_json_schema
         measured={**arguments,'text_format':to_strict_json_schema(schema)}
-        if len(json.dumps(measured,ensure_ascii=False).encode('utf-8'))>self.max_input_bytes:
-            raise ProviderError('input_limit','Model input exceeds HR_MODEL_MAX_INPUT_BYTES; narrow the input or explicitly review the cap. No call sent.')
+        input_bytes=len(json.dumps(measured,ensure_ascii=False).encode('utf-8'))
+        if input_bytes>self.max_input_bytes:
+            raise ProviderError('input_limit',f'模型输入为 {input_bytes} 字节，超过当前上限 {self.max_input_bytes} 字节（HR_MODEL_MAX_INPUT_BYTES）；本次未发送模型请求。请缩小输入或调整上限后再试。')
         call_id=self._reserve(role,payload)
         usage=None;status='failed';completed=False
         try:
