@@ -1,0 +1,36 @@
+name: Container smoke test
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Linux image
+        run: docker build -t hr-agent-ci .
+      - name: Verify local document tools
+        run: |
+          docker run --rm hr-agent-ci tesseract --list-langs
+          docker run --rm hr-agent-ci libreoffice --headless --version
+      - name: Start isolated fixture runtime
+        run: |
+          docker run -d --name hr-agent-ci -p 127.0.0.1:10000:10000 \
+            -e HR_ACCESS_USER=ci -e HR_ACCESS_PASSWORD=ci-only-not-a-real-secret \
+            -e HR_MODEL_MODE=fixture hr-agent-ci
+          for i in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:10000/health; then break; fi
+            sleep 2
+          done
+      - name: Check protected application
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:10000/api/workspace)" = 401
+          curl --fail --silent -u ci:ci-only-not-a-real-secret http://127.0.0.1:10000/ > /tmp/index.html
+          grep -q '<html' /tmp/index.html
+          curl --fail --silent -u ci:ci-only-not-a-real-secret http://127.0.0.1:10000/api/workspace > /dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -u ci:ci-only-not-a-real-secret -H 'Accept: text/html' http://127.0.0.1:10000/api/not-a-route)" = 404
+      - name: Container diagnostics
+        if: failure()
+        run: docker logs hr-agent-ci

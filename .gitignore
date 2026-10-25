@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+!production.env.example
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+dist/
+runtime/
+*.sqlite*
+.DS_Store
