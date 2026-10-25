@@ -15,7 +15,7 @@ Built independently for a Micro Connect HR AI Agent Intern use case. This is not
 
 ## Stack
 
-React / TypeScript / Vite, FastAPI / Python, LangGraph, SQLite, PyMuPDF, local OCR and LibreOffice. Model credentials are supplied by the operator. Native PDF extraction precedes OCR. This is a single-workspace MVP, not a multi-tenant ATS.
+React / TypeScript / Vite, FastAPI / Python, LangGraph, SQLite (local) or PostgreSQL plus private Supabase Storage (hosted), PyMuPDF, OCR and LibreOffice. Model credentials are supplied by the operator. Native PDF extraction precedes OCR. This is a single-workspace MVP, not a multi-tenant ATS.
 
 ## Run with Docker
 
@@ -33,6 +33,10 @@ Open http://localhost:10000 and sign in using the configured access credentials.
 ## Hosting
 
 Use a Docker web service with HTTPS and a persistent disk mounted at `/data`, one application process and one replica. `deploy/start.sh` reads the provider's `PORT`. Authentication protects the app and its APIs/documents; `/health` is the minimal health check. Configure all secrets through the hosting provider. SQLite, document previews and model usage accounting must remain on the persistent disk.
+
+For an ephemeral host such as Render Free, select `HR_STORAGE_BACKEND=supabase` instead. Apply `backend/sql/supabase_bootstrap.sql` to your PostgreSQL project and create a **private** Storage bucket. Configure `HR_DATABASE_URL` using the Supabase **session pooler** on port 5432 with TLS, `HR_SUPABASE_URL`, `HR_SUPABASE_SECRET_KEY`, `HR_STORAGE_BUCKET`, and a disposable `HR_CACHE_DIR`. Database state, diagnostics and usage accounting then reside in PostgreSQL; originals and previews reside in private object storage. Never put the server secret in frontend code. See the environment example for configuration names.
+
+Remote mode still permits only one writer. Stop the old instance before replacing it; zero-downtime rolling deployments are not supported. Free hosting may sleep and free storage projects may pause after inactivity. Cloud persistence and access control must be verified on your actual deployment, independently of local fixture tests.
 
 Deployments interrupt in-flight analysis; interrupted jobs must be retried explicitly. Back up the data disk before upgrades. Model invocation limits are cumulative safety caps, not a monthly billing guarantee. Default live mode does not silently fall back to fixture data.
 
