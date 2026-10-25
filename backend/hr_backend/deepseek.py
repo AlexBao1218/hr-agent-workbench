@@ -40,8 +40,13 @@ class DeepSeekProvider(OpenAIProvider):
         self.reasoning_effort=reasoning_setting('HR_MODEL_REASONING_EFFORT','none')
         self.role_reasoning={role:reasoning_setting(f'HR_MODEL_{role.upper()}_REASONING_EFFORT',self.reasoning_effort) for role in ('match','review')}
         self.usage_path=Path(os.getenv('HR_DATA_DIR',Path(__file__).resolve().parents[2]/'runtime'))/'model-usage.sqlite3'
+        self._usage_ledger=None
 
     def configure_usage_root(self,root):self.usage_path=Path(root)/'model-usage.sqlite3'
+
+    def configure_usage_ledger(self,ledger):
+        if ledger is None:raise ValueError('A durable usage ledger is required.')
+        self._usage_ledger=ledger
 
     @contextmanager
     def _connect(self):
@@ -53,6 +58,15 @@ class DeepSeekProvider(OpenAIProvider):
         finally:db.close()
 
     def _reserve(self,role,payload):
+        if self._usage_ledger is not None:
+            run_id=payload.get('context',{}).get('runId','')
+            if not isinstance(run_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',run_id):run_id=None
+            try:call_id=self._usage_ledger.reserve(role,run_id,self.max_calls)
+            except ProviderError:raise
+            except Exception:raise ProviderError('usage_ledger_unavailable','Durable model budget reservation failed. No call sent; restore storage before trying again.') from None
+            if not isinstance(call_id,str) or not call_id:
+                raise ProviderError('usage_ledger_unavailable','Durable model budget reservation was not confirmed. No call sent.')
+            return call_id
         with self._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             if db.execute('SELECT count(*) FROM calls').fetchone()[0]>=self.max_calls:
@@ -64,6 +78,11 @@ class DeepSeekProvider(OpenAIProvider):
         return call_id
 
     def _record(self,call_id,status,usage=None):
+        if self._usage_ledger is not None:
+            from .usage_ledger import normalize_usage
+            try:return self._usage_ledger.record(call_id,status,normalize_usage(usage))
+            except ProviderError:raise
+            except Exception:raise ProviderError('usage_ledger_unavailable','Model usage could not be recorded. The reservation remains consumed; no automatic retry.') from None
         def count(name):
             value=usage.get(name) if isinstance(usage,dict) else None
             return value if isinstance(value,int) and not isinstance(value,bool) and value>=0 else None
@@ -78,6 +97,10 @@ class DeepSeekProvider(OpenAIProvider):
             db.execute('UPDATE calls SET status=?,inputTokens=?,outputTokens=?,cacheHitTokens=?,cacheMissTokens=? WHERE id=?',(status,prompt,output,hit,miss,call_id))
 
     def usage_summary(self):
+        if self._usage_ledger is not None:
+            try:return self._usage_ledger.summary()
+            except ProviderError:raise
+            except Exception:raise ProviderError('usage_ledger_unavailable','Durable model usage storage is unavailable.') from None
         with self._connect() as db:
             row=db.execute('SELECT count(*),coalesce(sum(inputTokens),0),coalesce(sum(outputTokens),0),coalesce(sum(cacheHitTokens),0),coalesce(sum(cacheMissTokens),0),coalesce(sum(CASE WHEN inputTokens IS NULL OR outputTokens IS NULL THEN 1 ELSE 0 END),0) FROM calls').fetchone()
         return dict(zip(('attempts','inputTokens','outputTokens','cacheHitTokens','cacheMissTokens','unknownUsageCalls'),row))

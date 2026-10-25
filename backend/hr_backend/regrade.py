@@ -11,7 +11,7 @@ def regrade_cached(store):
             raise ValueError('Wait for active analysis before regrading cached results.')
         standards=state.get('standards');hat=state['hat']
         if not standards:return {'runId':None,'changes':[],'skipped':[]}
-        projection=DisplayProjection(store.root);changes=[];skipped=[]
+        projection=DisplayProjection(store.root,getattr(store,"read_diagnostic",None));changes=[];skipped=[]
         eligible=[]
         for candidate in state['candidates'].values():
             old=state['assessments'].get(candidate.get('assessmentId'))

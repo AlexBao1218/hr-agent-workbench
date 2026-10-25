@@ -35,7 +35,7 @@ def workbench_view(state, provider):
         runtime=runtime_settings(provider)))
 
 
-def read_artifacts(root, run):
+def read_artifacts(root, run, diagnostic_reader=None):
     directory = (Path(root)/'diagnostics').resolve()
     artifacts, total, truncated = [], 0, False
     references = run.get('_diagnosticFiles', [])
@@ -46,15 +46,18 @@ def read_artifacts(root, run):
             relative = Path(reference)
             if relative.is_absolute() or '..' in relative.parts or len(relative.parts) != 2 or relative.parts[0] != 'diagnostics' or relative.suffix != '.json':
                 raise ValueError()
-            path = Path(root)/relative
-            if path.is_symlink() or path.resolve().parent != directory: raise ValueError()
-            # Also reject redirecting the entire diagnostics directory outside the store.
-            if directory.parent != Path(root).resolve(): raise ValueError()
-            size = path.stat().st_size
-            if size > MAX_DIAGNOSTIC_BYTES-total:
-                truncated = True
-                continue
-            with path.open('rb') as file: raw = file.read(MAX_DIAGNOSTIC_BYTES-total+1)
+            if diagnostic_reader:
+                raw=diagnostic_reader(reference)
+            else:
+                path = Path(root)/relative
+                if path.is_symlink() or path.resolve().parent != directory: raise ValueError()
+                # Also reject redirecting the entire diagnostics directory outside the store.
+                if directory.parent != Path(root).resolve(): raise ValueError()
+                size = path.stat().st_size
+                if size > MAX_DIAGNOSTIC_BYTES-total:
+                    truncated = True
+                    continue
+                with path.open('rb') as file: raw = file.read(MAX_DIAGNOSTIC_BYTES-total+1)
             total += len(raw)
             if total > MAX_DIAGNOSTIC_BYTES:
                 truncated = True
@@ -129,7 +132,7 @@ def install_workbench(app, store, provider):
     def inspect_run(rid: str):
         run = store.read()['runs'].get(rid)
         if run is None: return error('not_found', 'Run not found.', 404)
-        artifacts, truncated = read_artifacts(store.root, run)
+        artifacts, truncated = read_artifacts(store.root, run, getattr(store,"read_diagnostic",None))
         snapshot = run.get('_agentSettings')
         return dict(run=public_data({key:run[key] for key in PUBLIC_RUN_FIELDS if key in run}),
                     settings=deepcopy(snapshot), historicalWarning=None if snapshot else '此历史运行未保存 Agent 设置快照，无法重建当时的提示词或参数。',

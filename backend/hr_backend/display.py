@@ -78,7 +78,9 @@ def project(assessment,standards,grounding,document):
 
 class DisplayProjection:
     """No persistent cache or writes. Read only explicitly indexed, bounded diagnostics."""
-    def __init__(self,root):self.root=Path(root).resolve()
+    def __init__(self,root,diagnostic_reader=None):
+        self.root=Path(root).resolve()
+        self.diagnostic_reader=diagnostic_reader
 
     def _artifacts(self,run):
         refs=run.get('_diagnosticFiles',[])
@@ -88,6 +90,14 @@ class DisplayProjection:
         result=[]
         for ref in refs:
             if not isinstance(ref,str):return None
+            if self.diagnostic_reader:
+                if not ref.startswith('diagnostics/'+run['id']+'-') or Path(ref).name != ref.split('/')[-1] or len(Path(ref).parts)!=2 or '..' in Path(ref).parts:return None
+                raw=self.diagnostic_reader(ref)
+                if len(raw)>4*1024*1024:return None
+                artifact=json.loads(raw)
+                if not isinstance(artifact,dict) or artifact.get('runId')!=run['id']:return None
+                result.append(artifact)
+                continue
             path=self.root/ref
             if (path.is_symlink() or path.parent!=directory or path.suffix!='.json'
                 or not path.name.startswith(run['id']+'-') or path.resolve().parent!=directory):return None
@@ -111,7 +121,7 @@ class DisplayProjection:
         for artifact in reused:
             ref=artifact['sourceArtifact']
             if ref not in indexed or artifact['sourceRunId']!=source['id'] or artifact.get('providerCalled') is not False:return False
-            actual=hashlib.sha256((self.root/ref).read_bytes()).hexdigest()
+            actual=hashlib.sha256(self.diagnostic_reader(ref) if self.diagnostic_reader else (self.root/ref).read_bytes()).hexdigest()
             if actual!=artifact['sourceArtifactSHA256'] or actual!=binding['artifactHashes'][ref]:return False
             original=indexed[ref]
             if any(artifact.get(k)!=v for k,v in original.items() if k not in metadata):return False

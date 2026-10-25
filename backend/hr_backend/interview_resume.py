@@ -93,6 +93,8 @@ def prepare(root,state,provider,source_run_id,candidate_id,document_digest,own_r
 
 def execute(app,source_run_id,candidate_id,document_digest,expected_digest):
     """Reserve once; exactly one interview call; use the normal publication function."""
+    if getattr(app.state.store,'is_remote',False):
+        raise WorkflowError('remote_resume_unsupported','Manual historical recovery is local-only in this release; no remote run was started.')
     store=app.state.store;provider=app.state.provider;workflow=app.state.workflow;hooks=app.state.resume_hooks
     require(provider.configured,'Provider is not configured.')
     require(bool(expected_digest),'An explicitly checked binding digest is required.')
@@ -139,6 +141,9 @@ def main():
     parser.add_argument('--candidate',required=True);parser.add_argument('--document-digest',required=True)
     parser.add_argument('--execute',action='store_true');parser.add_argument('--expected-digest')
     args=parser.parse_args()
+    import os
+    if os.environ.get('HR_STORAGE_BACKEND','local') != 'local':
+        raise SystemExit('This historical recovery CLI is local-only; remote storage was not modified.')
     # Import loads the same ignored backend environment as the normal application.
     from .app import create_app
     from .provider import create_provider

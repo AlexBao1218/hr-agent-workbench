@@ -19,10 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/pyproject.toml ./backend/pyproject.toml
+COPY backend/requirements.lock.txt ./backend/requirements.lock.txt
 COPY backend/hr_backend ./backend/hr_backend
 COPY packages/documents/pyproject.toml ./packages/documents/pyproject.toml
 COPY packages/documents/hr_documents ./packages/documents/hr_documents
-RUN pip install --no-cache-dir ./backend ./packages/documents
+RUN pip install --no-cache-dir -c backend/requirements.lock.txt ./backend ./packages/documents
+COPY packages/documents/linux_smoke.py ./packages/documents/linux_smoke.py
 COPY --from=frontend /build/frontend/dist ./frontend/dist
 COPY deploy/start.sh ./deploy/start.sh
 RUN useradd --create-home --uid 10001 app && mkdir /data && chown app:app /data \

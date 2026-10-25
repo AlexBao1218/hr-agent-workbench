@@ -50,7 +50,8 @@ def create_production_app(*, environ=None, provider=None):
     username, password = env.get('HR_ACCESS_USER', ''), env.get('HR_ACCESS_PASSWORD', '')
     if not username.strip() or not password.strip() or ':' in username:
         raise RuntimeError('Production requires HR_ACCESS_USER and HR_ACCESS_PASSWORD; username cannot contain a colon')
-    data_dir = env.get('HR_DATA_DIR', '')
+    remote = env.get('HR_STORAGE_BACKEND', 'local') == 'supabase'
+    data_dir = env.get('HR_CACHE_DIR', '/tmp/hr-ai') if remote else env.get('HR_DATA_DIR', '')
     if not data_dir or not Path(data_dir).is_absolute():
         raise RuntimeError('Production requires an absolute HR_DATA_DIR on persistent storage')
     root = Path(__file__).resolve().parents[2]
@@ -64,7 +65,7 @@ def create_production_app(*, environ=None, provider=None):
 
     # Import only after deployment configuration is validated; no local data fallback.
     from .app import create_app
-    app = create_app(data_dir=data_dir, provider=provider)
+    app = create_app(data_dir=data_dir, provider=provider, storage_config=env)
     expected_user, expected_password = username.encode('utf-8'), password.encode('utf-8')
 
     @app.middleware('http')

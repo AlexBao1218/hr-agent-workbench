@@ -16,11 +16,13 @@
 !contracts/api.ts
 !backend/
 !backend/pyproject.toml
+!backend/requirements.lock.txt
 !backend/hr_backend/
 !backend/hr_backend/*.py
 !packages/
 !packages/documents/
 !packages/documents/pyproject.toml
+!packages/documents/linux_smoke.py
 !packages/documents/hr_documents/
 !packages/documents/hr_documents/*.py
 !packages/documents/hr_documents/*.swift

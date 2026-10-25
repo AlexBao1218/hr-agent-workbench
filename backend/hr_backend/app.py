@@ -5,6 +5,7 @@ import json
 import os
 import unicodedata
 from pathlib import Path
+from contextlib import asynccontextmanager
 from typing import Literal
 from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -86,16 +87,40 @@ def same_meaning(a,b):
     def semantics(x): return sorted((c['id'],c['title'],c['description'],c['group'],c['jdQuote']) for c in x['criteria'])
     return a and b and a['jdText']==b['jdText'] and semantics(a)==semantics(b)
 
-def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted=True):
+def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted=True, storage_config=None):
     from .provider import create_provider
     from .workflow import Workflow
     provider = provider or create_provider()
     workflow = Workflow(provider)
-    store = Store(Path(data_dir or os.environ.get('HR_DATA_DIR',ROOT/'runtime')).resolve())
-    display_projection=DisplayProjection(store.root)
+    from .storage import create_storage
+    store, blobs = create_storage(Path(data_dir or os.environ.get('HR_DATA_DIR',ROOT/'runtime')).resolve(), storage_config)
+    remote = bool(getattr(store, 'is_remote', False))
+    diagnostic_reader = store.read_diagnostic if remote else None
+    display_projection=DisplayProjection(store.root, diagnostic_reader)
     if hasattr(provider,'configure_usage_root'):provider.configure_usage_root(store.root)
-    app = FastAPI(title='Micro Connect HR AI — local advisory MVP')
+    if remote and provider.mode == 'live' and not hasattr(provider, 'configure_usage_ledger'):
+        store.close()
+        raise RuntimeError('Remote live mode requires a provider with a durable usage ledger (DeepSeek).')
+    if remote and hasattr(provider, 'configure_usage_ledger'):
+        from .usage_ledger import PostgresUsageLedger
+        provider.configure_usage_ledger(PostgresUsageLedger(store))
+    @asynccontextmanager
+    async def lifespan(app):
+        try:yield
+        finally:
+            if remote:
+                store.close()
+                if hasattr(blobs,'close'):blobs.close()
+    app = FastAPI(title='Micro Connect HR AI — local advisory MVP',lifespan=lifespan)
     app.state.store, app.state.provider, app.state.workflow = store,provider,workflow
+    if remote:
+        from .postgres_store import RemoteStoreError
+        from .blob_store import BlobStoreError
+        async def storage_failure(request, exc):
+            return JSONResponse({'error':{'code':'storage_unavailable','message':'Remote storage is unavailable; no local fallback was used.'}},status_code=503)
+        app.add_exception_handler(RemoteStoreError,storage_failure)
+        app.add_exception_handler(BlobStoreError,storage_failure)
+    app.state.blobs = blobs
     install_workbench(app,store,provider)
     workflow.settings_resolver=lambda rid: copy.deepcopy(store.read()['runs'].get(rid,{}).get('_agentSettings'))
     # Interrupted work never masquerades as completed after restart.
@@ -176,8 +201,8 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             run=s['runs'][rid]
             if '_diagnostic' in event:
                 diagnostic={'runId':rid,'role':event['role'],'attempt':event['attempt'],'candidateId':event.get('candidateId'),'standardsVersion':run['standardsVersion'],'hatVersion':run['hatVersion'],'createdAt':now(),**copy.deepcopy(event['_diagnostic'])}
-                if hasattr(provider,'usage_path'):diagnostic['usageReference']={'ledger':'model-usage.sqlite3','runId':rid}
-                reference=write_diagnostic(store.root,diagnostic)
+                if hasattr(provider,'usage_path'):diagnostic['usageReference']={'ledger':'postgres:model_calls' if remote else 'model-usage.sqlite3','runId':rid}
+                reference=store.write_diagnostic(diagnostic) if remote else write_diagnostic(store.root,diagnostic)
                 run.setdefault('_diagnosticFiles',[]).append(reference)
                 if diagnostic['kind']=='validated_profile':
                     cid=event.get('candidateId');candidate=s['candidates'].get(cid)
@@ -202,18 +227,33 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             s['runs'][rid].update(status='failed' if errors else 'succeeded',error='; '.join(errors) if errors else None)
             if s['activeRunId']==rid:s['activeRunId']=None
     def public_document(doc):
-        d={k:copy.deepcopy(v) for k,v in doc.items() if k not in ('path','text','hash')}
+        d={k:copy.deepcopy(v) for k,v in doc.items() if k not in ('path','text','hash','blobKey')}
         for p in d['pages']:
-            has_image=p.pop('imagePath',None)
+            has_image=p.pop('imagePath',None) or p.pop('imageBlobKey',None)
+            p.pop('imageHash',None)
             p['imageUrl']=f"/api/documents/{d['id']}/pages/{p['number']}" if has_image else None
         d['originalUrl']=f"/api/documents/{d['id']}/original"
         return d
     def parse_file(doc):
-        if parser: result=parser(doc['path'],str(store.root/'previews'/doc['id']),doc['id'])
+        source = str(blobs.materialize(doc['blobKey'], doc['hash'])) if remote else doc['path']
+        output = store.root/'previews'/doc['id']
+        if parser: result=parser(source,str(output),doc['id'])
         else:
             from hr_documents import parse_document
-            result=parse_document(doc['path'],str(store.root/'previews'/doc['id']),doc['id'])
+            result=parse_document(source,str(output),doc['id'])
         result.update(path=doc['path'],filename=doc['filename'],hash=doc['hash'])
+        if remote:
+            result['blobKey']=doc['blobKey']
+            for page in result.get('pages',[]):
+                local=page.pop('imagePath',None)
+                if local:
+                    path=Path(local).resolve()
+                    if not path.is_relative_to(output.resolve()):
+                        raise ApiFailure('invalid_preview','Parser preview escaped output directory',500)
+                    digest=hashlib.sha256(path.read_bytes()).hexdigest()
+                    key=f"previews/{doc['id']}/{digest}{path.suffix}"
+                    blobs.put_file(key,path)
+                    page.update(imageBlobKey=key,imageHash=digest)
         return result
     def publish_result(rid,cid,doc,standards,hat,generations,result,binding_check=None):
         grade,value=rank(standards['criteria'],result['observations'],result['reviewed'])
@@ -439,12 +479,22 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         if suffix not in MIMES:raise ApiFailure('unsupported_type','Supported files: PDF, DOCX, PNG, JPEG.')
         if not data or len(data)>MAX_FILE:raise ApiFailure('invalid_size','File must contain 1 byte to 20 MiB.')
         digest=hashlib.sha256(data).hexdigest()
+        # Remote object is durable before any committed state references it.
+        did=uid();cid=uid();key=f'uploads/{did}/original{suffix}'
+        target=store.root/key
+        if remote:
+            snapshot=store.read()
+            for candidate in snapshot['candidates'].values():
+                if snapshot['documents'][candidate['documentId']]['hash']==digest:
+                    return candidate['id'],False
+            blobs.put_bytes(key,data,MIMES[suffix])
         with store.transaction() as s:
             for c in s['candidates'].values():
                 if s['documents'][c['documentId']]['hash']==digest:return c['id'],False
-            did=uid();cid=uid();target=store.root/'uploads'/did/('original'+suffix)
-            target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
-            s['documents'][did]=dict(id=did,filename=filename,mimeType=MIMES[suffix],status='failed',previewKind='text',pages=[],blocks=[],warnings=[],text='',path=str(target),hash=digest)
+            if not remote:
+                target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
+            s['documents'][did]=dict(id=did,filename=filename,mimeType=MIMES[suffix],status='failed',previewKind='text',pages=[],blocks=[],warnings=[],text='',path=key if remote else str(target),hash=digest)
+            if remote:s['documents'][did]['blobKey']=key
             s['candidates'][cid]=dict(id=cid,name=Path(filename).stem,fictional=fictional,documentId=did,profile=None,stage='uploaded',error=None,generation=0,assessmentId=None)
             return cid,True
     @app.post('/api/candidates')
@@ -542,17 +592,17 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def original(did:str):
         doc=store.read()['documents'].get(did)
         if not doc:raise ApiFailure('not_found','Document not found',404)
-        path=Path(doc['path']).resolve()
-        if not path.is_relative_to(store.root/'uploads') or not path.is_file():raise ApiFailure('not_found','Original unavailable',404)
+        path=blobs.materialize(doc['blobKey'],doc['hash']) if remote else Path(doc['path']).resolve()
+        if not remote and (not path.is_relative_to(store.root/'uploads') or not path.is_file()):raise ApiFailure('not_found','Original unavailable',404)
         return FileResponse(path,media_type=doc['mimeType'],filename=doc['filename'],content_disposition_type='inline')
     @app.get('/api/documents/{did}/pages/{number}')
     def page(did:str,number:int):
         doc=store.read()['documents'].get(did)
         if not doc:raise ApiFailure('not_found','Document not found',404)
         item=next((p for p in doc['pages'] if p['number']==number),None)
-        if not item or not item.get('imagePath'):raise ApiFailure('not_found','Page image unavailable; use text preview or download original.',404)
-        path=Path(item['imagePath']).resolve()
-        if not path.is_relative_to(store.root/'previews') or not path.is_file():raise ApiFailure('not_found','Page image unavailable',404)
+        if not item or not (item.get('imagePath') or item.get('imageBlobKey')):raise ApiFailure('not_found','Page image unavailable; use text preview or download original.',404)
+        path=blobs.materialize(item['imageBlobKey'],item['imageHash']) if remote else Path(item['imagePath']).resolve()
+        if not remote and (not path.is_relative_to(store.root/'previews') or not path.is_file()):raise ApiFailure('not_found','Page image unavailable',404)
         return FileResponse(path,media_type='image/png' if path.suffix.lower()=='.png' else 'image/jpeg')
     app.state.resume_hooks={'new_run':new_run,'trace':trace,'finish_run':finish_run,
                             'publish_result':publish_result,'profile_identity':profile_identity,'safe_error':safe_error}
