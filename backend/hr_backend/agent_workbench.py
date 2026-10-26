@@ -5,11 +5,11 @@ from pathlib import Path
 from fastapi.responses import JSONResponse
 from .agent_settings import (Activate, DraftUpdate, Restore, ROLES, default_settings,
     initialize_settings, locked_rules, runtime_settings, validate_caps)
-from .schemas import JDResult, CandidateProfile, StructuredMatchResult, StructuredReviewResult, InterviewResult
+from .schemas import JDResult, CandidateProfile, CriterionRowsResult, CriterionRowsReview, InterviewResult
 from .store import uid, version
 
 MAX_DIAGNOSTIC_BYTES = 4 * 1024 * 1024
-SCHEMAS = dict(zip(ROLES, (JDResult, CandidateProfile, StructuredMatchResult, StructuredReviewResult, InterviewResult)))
+SCHEMAS = dict(zip(ROLES, (JDResult, CandidateProfile, CriterionRowsResult, CriterionRowsReview, InterviewResult)))
 PUBLIC_RUN_FIELDS = ('id','status','mode','standardsVersion','hatVersion','steps','error','createdAt')
 # Diagnostics are structured evidence, never provider HTTP bodies/private reasoning.
 PRIVATE_KEYS = {'apikey','authorization','secret','password','token','accesstoken','refreshtoken','reasoning','reasoningcontent','chainofthought','httpbody','rawresponse','providerresponse'}

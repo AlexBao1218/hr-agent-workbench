@@ -13,9 +13,9 @@ from langsmith import tracing_context
 from .provider import ProviderError, structured_output_error
 from .evidence import source_ownership_context, validate_source_ownership, reading_order, rebind_repaired_verification_targets, validate_verification_targets, interview_context, profile_navigation, review_context, compose_point_explanations, point_evidence_roles, validate_point_grounding, exclusion_review_context, confirm_source_exclusions, identity_free_summary, validate_source_exclusions, canonical_requirements, capability_index, supplement_capability_sources, validate_capability_coverage, interview_plan, validate_interview_focus
 from .schemas import (JDResult, CandidateProfile, MatchResult, ReviewResult,
-                      StructuredMatchResult, StructuredReviewResult,
+                      StructuredMatchResult, StructuredReviewResult, CriterionRowsResult, CriterionRowsReview,
                       InterviewResult, ChatResult, StandardsChatResult)
-from .structured_evidence import active_structure, project_match, review_projection, validate_review as validate_structured_review, repair_findings
+from .structured_evidence import active_structure, project_match, review_projection, validate_review as validate_structured_review, repair_findings, row_payload, project_rows, row_claim_grounding, validate_row_review, row_repair_findings
 
 class WorkflowError(RuntimeError):
     def __init__(self, code, message):
@@ -128,6 +128,7 @@ class Workflow:
     def __init__(self, provider, max_repairs=None):
         self.provider=provider
         self.structured_evidence=provider.mode=='live' and not getattr(provider,'legacy_evidence_fixture',False)
+        self.inline_evidence=self.structured_evidence and getattr(provider,'evidence_protocol',3)==3
         self.settings_resolver=None
         if max_repairs is None:
             try:max_repairs=int(os.getenv('HR_MAX_REPAIRS',str(getattr(provider,'default_max_repairs',1))))
@@ -219,6 +220,10 @@ class Workflow:
             raise WorkflowError('unconfirmed_snapshot','Confirm standards and HAT before candidate analysis.')
         context={'runId':run_id,'candidateId':candidate_id,'standardsVersion':standards['version']['id'],'hatVersion':hat['version']['id']}
         snapshot=self.run_settings(run_id)
+        if self.inline_evidence and snapshot:
+            from .prompts import ROW_TEMPLATE_VERSION
+            if any(not snapshot['roles'][r]['systemPrompt'].startswith(ROW_TEMPLATE_VERSION) for r in ('match','review')):
+                raise WorkflowError('template_migration_required','Criterion-row protocol requires explicit reviewed match/review template migration. No model call made.')
         max_repairs=snapshot['flow']['matchRepairs'] if snapshot else self.max_repairs
         # No filenames, manifest metadata, gold labels, credentials or filesystem paths enter model payloads.
         payload={'document':{'id':document['id'],'blocks':deepcopy(document['blocks'])},
@@ -251,6 +256,8 @@ class Workflow:
             return {'profile':result}
 
         def match_node(state):
+            if self.inline_evidence:
+                return self._match_rows(document,standards,hat,context,feedback or [],state,trace_callback)
             attempt=state.get('attempt',0)+1
             index=capability_index(document,state['profile'])
             repair_errors=list(dict.fromkeys(state.get('semanticErrors',[])+state.get('errors',[])))
@@ -318,6 +325,8 @@ class Workflow:
                     'structuredEvidence':structured or state.get('structuredEvidence',{}),'matchInputHash':input_hash,'matchInputAttempt':attempt}
 
         def review_node(state):
+            if self.inline_evidence:
+                return self._review_rows(document,standards,hat,context,feedback or [],state,max_repairs,trace_callback)
             if state['errors']:
                 self._event(trace_callback,context,'review','skipped',state['attempt'],'Deterministic validation blocked semantic review; no provider call')
                 self._diagnostic(trace_callback,context,'review',state['attempt'],{'kind':'review_decision','analysis':state['analysis'],'verificationTargets':state['verificationTargets'],
@@ -371,6 +380,66 @@ class Workflow:
         with tracing_context(enabled=False):
             result=graph.compile().invoke({'payload':payload,'attempt':0,'errors':[]},config={'recursion_limit':20,'callbacks':[]})
         return {'profile':result['profile'],**result['analysis'],'questions':result['questions'],'reviewed':True}
+
+    def _match_rows(self,document,standards,hat,context,feedback,state,callback):
+        attempt=state.get('attempt',0)+1
+        current=row_payload(document,standards,hat,context,feedback,state['profile'])
+        issues=list(dict.fromkeys(state.get('semanticErrors',[])+state.get('errors',[])))
+        if attempt>1:
+            current['repairIssues']=issues
+            current['previousRows']=deepcopy(state.get('structuredEvidence',{}))
+        input_hash=hashlib.sha256(json.dumps(current,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        if state.get('matchInputHash')==input_hash:
+            self._diagnostic(callback,context,'match',attempt,{'kind':'repair_stalled','inputHash':input_hash,'providerCalled':False})
+            raise WorkflowError('repair_stalled','Matching repair input did not change; stopped without repeating the same model request.')
+        data={};analysis={};grounding=[];targets=[];selected=[];errors=[]
+        try:
+            data=self._call('match',current,CriterionRowsResult,callback,attempt,defer_success=True)
+            analysis,grounding,targets,selected,errors=project_rows(data,standards,state['profile'])
+            errors+=validate_refs(data,document)
+            errors+=validate_source_ownership({'observations':[],'concerns':[]},row_claim_grounding(data),document,state['profile'])
+            if not errors:
+                analysis=compose_point_explanations(analysis,grounding)
+                errors+=validate_analysis(analysis,document,standards)
+                errors+=validate_point_grounding(analysis,grounding,require_facts=True)
+                errors+=validate_verification_targets(targets,analysis,standards,state['profile'])+validate_refs(targets,document)
+                errors+=validate_source_ownership(analysis,grounding,document,state['profile'])
+                errors+=validate_presentation(analysis)
+                analysis['summary']=identity_free_summary(analysis,standards)
+        except ProviderError as exc:
+            if exc.code!='model_invalid_output':raise
+            errors=[exc.message]
+        self._event(callback,context,'match','failed' if errors else 'succeeded',attempt,'Criterion evidence rows validated' if not errors else 'Criterion row validation failed')
+        self._diagnostic(callback,context,'match',attempt,{'kind':'match_validation','evidenceProtocol':3,
+            'structuredEvidence':data,'analysis':analysis,'pointGrounding':grounding,'verificationTargets':targets,
+            'selectedUnknowns':selected,'validationIssues':list(dict.fromkeys(errors))})
+        return {'analysis':analysis,'pointGrounding':grounding,'verificationTargets':targets,'structuredEvidence':data or state.get('structuredEvidence',{}),
+                'errors':list(dict.fromkeys(errors)),'attempt':attempt,'approved':False,'matchInputHash':input_hash,'matchInputAttempt':attempt}
+
+    def _review_rows(self,document,standards,hat,context,feedback,state,max_repairs,callback):
+        attempt=state['attempt'];errors=state['errors']
+        if errors:
+            self._event(callback,context,'review','skipped',attempt,'Deterministic row validation blocked review; no provider call')
+            self._diagnostic(callback,context,'review',attempt,{'kind':'review_decision','evidenceProtocol':3,
+                'analysis':state['analysis'],'pointGrounding':state['pointGrounding'],'verificationTargets':state['verificationTargets'],
+                'validationIssues':errors,'reviewIssues':[],'reviewApproved':False,'publishable':False,'providerCalled':False})
+            if attempt>max_repairs:raise WorkflowError('review_failed','Deterministic validation did not pass after bounded repair; semantic review was not called.')
+            return {'approved':False,'errors':errors}
+        current=row_payload(document,standards,hat,context,feedback,state['profile'])
+        current['criterionEvidence']=deepcopy(state['structuredEvidence'])
+        _,_,_,selected,_=project_rows(state['structuredEvidence'],standards,state['profile'])
+        current['selectedUnknowns']=selected
+        review=self._call('review',current,CriterionRowsReview,callback,attempt,defer_success=True)
+        contract_errors=validate_row_review(review,state['structuredEvidence'],standards)+validate_refs(review,document)
+        issues=row_repair_findings(review);approved=review['approved'] and not issues and not contract_errors
+        self._event(callback,context,'review','succeeded' if approved else 'failed',attempt,'Criterion evidence review passed' if approved else 'Criterion evidence review rejected publication')
+        self._diagnostic(callback,context,'review',attempt,{'kind':'review_decision','evidenceProtocol':3,
+            'analysis':state['analysis'],'pointGrounding':state['pointGrounding'],'verificationTargets':state['verificationTargets'],
+            'validationIssues':[],'reviewIssues':issues,'findings':review['findings'],'reviewContractIssues':contract_errors,
+            'reviewApproved':review['approved'],'publishable':approved})
+        if contract_errors:raise WorkflowError('review_contract_invalid','Review findings are not grounded in current rows: '+'; '.join(contract_errors))
+        if not approved and attempt>max_repairs:raise WorkflowError('review_failed','Evidence review did not pass after bounded repair. Inspect sources or correct the input and retry.')
+        return {'approved':approved,'errors':issues,'semanticErrors':[] if approved else issues}
 
     def interview_only(self,document,standards,hat,profile,analysis,run_id,candidate_id,trace_callback=None,feedback=None,targets=None):
         """Shared final role; callers must establish approved analysis provenance."""

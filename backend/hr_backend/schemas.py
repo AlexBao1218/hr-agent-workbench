@@ -212,6 +212,42 @@ class StructuredReviewResult(Strict):
     sourceExclusions: list[SourceExclusion] = Field(default_factory=list)
     sourceExclusionDecisions: list[SourceExclusionDecision] = Field(default_factory=list)
 
+# Private protocol v3: one row per confirmed criterion, no display/link inventory.
+class CriterionEvidence(Strict):
+    requirementQuote: str = Field(min_length=1, description='Exact confirmed requirement substring this evidence addresses.')
+    state: Literal['supported','partial','contradiction']
+    claim: str = Field(min_length=1, max_length=180, description='One source-backed candidate fact, preserving employer and all material qualifications.')
+    evidence: list[EvidenceRef] = Field(min_length=1)
+
+class CriterionUnknown(Strict):
+    requirementQuote: str = Field(min_length=1, description='Exact confirmed requirement substring with an unresolved answer.')
+    singleGoal: str = Field(min_length=1, max_length=180, description='One missing answer only. Other unknowns stay separate; never create gaps to fill interview slots.')
+    experienceId: str | None
+    evidence: list[EvidenceRef] = Field(description='Only exact sources for that explicitly anchored experience; null experience uses [].')
+
+class CriterionRow(Strict):
+    criterionId: str
+    coverage: Literal['supported','partial','unknown','contradiction'] = Field(description='Judgment of the FULL confirmed criterion, preserving OR, preferences and scope. Never derive from the highest child state.')
+    evidence: list[CriterionEvidence]
+    unknowns: list[CriterionUnknown] = Field(description='Retain ALL material unresolved subparts, including those not selected for interview.')
+
+class CriterionRowsResult(Strict):
+    rows: list[CriterionRow] = Field(min_length=1)
+
+class CriterionReviewFinding(Strict):
+    criterionId: str
+    section: Literal['coverage','evidence','unknown']
+    index: int | None = Field(description='Current zero-based evidence/unknown index; coverage uses null.', ge=0)
+    statement: str = Field(min_length=1, description='Exact full CURRENT coverage value, candidate claim or singleGoal being questioned.')
+    requirementQuote: str = Field(min_length=1, description='Evidence/unknown findings copy that current item requirementQuote. Coverage findings quote an exact own-criterion substring.')
+    evidence: list[EvidenceRef]
+    severity: Literal['blocker','warning']
+    message: str = Field(min_length=1)
+
+class CriterionRowsReview(Strict):
+    approved: bool
+    findings: list[CriterionReviewFinding]
+
 class InterviewQuestion(Strict):
     id: str
     question: str = Field(description='One verification objective following its questionPlan slot and assigned experience. A brief example follow-up about the same activity is allowed regardless of question-mark count; never merge independent topics or employers.')

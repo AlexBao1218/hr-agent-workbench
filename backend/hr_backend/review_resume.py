@@ -99,6 +99,7 @@ def execute(app,source_run_id,candidate_id,document_digest,expected_digest,corre
         raise WorkflowError('remote_resume_unsupported','Manual historical recovery is local-only in this release; no remote run was started.')
     store=app.state.store;provider=app.state.provider;workflow=app.state.workflow;hooks=app.state.resume_hooks
     require(provider.configured,'Provider is not configured.')
+    require(not workflow.inline_evidence,'Historical display-payload correction requires its legacy protocol; use reviewed criterion-row reanalysis. Saved records remain readable.')
     require(bool(expected_digest),'An explicitly checked binding digest is required.')
     with store.transaction() as state:
         plan=prepare(store.root,state,provider,source_run_id,candidate_id,document_digest,correction)

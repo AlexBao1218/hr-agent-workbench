@@ -175,9 +175,68 @@ Use concise Chinese titles and distinguish preference from requirement.''',
 }
 
 
+# Explicit v3 defaults. Saved user tasks are never overwritten by module loading.
+ROW_TEMPLATE_VERSION = 'criterion-rows-v3'
+LEGACY_ROW_TASKS = {role:ROLE_INSTRUCTIONS[role] for role in ('match','review')}
+PROJECT_DOMAIN_RULE = """PROJECT-DOMAIN EVIDENCE CHECK:
+Each candidate fact needs its own exact source and correct activity/employer. Company background,
+neighboring projects and navigation hints cannot establish that activity's domain. Keep unspecified domains unknown.
+"""
+VERIFICATION_SCOPE_RULE = """VERIFICATION TARGET SCOPE (match and review):
+Each unresolved item asks ONE missing answer. Keep other unknowns in their own row; selecting one item does not
+claim to cover every clause. Do not demand questions for every unknown or manufacture gaps to fill three slots.
+Retain all remaining unknowns in their observations (program projection of rows). No individual criterion automatically owns a question slot.
+Unanchored goals have experienceId=null/evidence=[]; anchored goals use only that experience's source.
+"""
+STRUCTURED_EVIDENCE_RULE = """PRIVATE PROTOCOL criterion-rows-v3:
+Only criterion evidence rows are model-authored. Program derives display labels, IDs, priority order and interview
+selection. No global fact/component/point/focus inventory, no model capability labels or duplicate narrative.
+Source text appears once in document.blocks; sourceOwnership/experiences are navigation, not independent proof.
+Whole-criterion coverage is a semantic judgment, never the highest child state. Missing is unknown, explicit conflict
+needs its actual source. Supported OR alternatives do not require all alternatives. Every current review objection
+binds an exact row subject; cosmetic preferences and reminders about already-preserved unknowns are not blockers.
+"""
+ROLE_INSTRUCTIONS['match'] = ROW_TEMPLATE_VERSION+"""
+Return one row for EVERY confirmed criterion. Each row contains whole-criterion coverage, inline evidence
+judgments and all material unknowns. Evidence judgments name one source-backed candidate fact, exact requirementQuote,
+its supported/partial/contradiction state, and that fact's exact blockId/quote references. Preserve all relevant
+sources from different activities with correct ownership, qualifications and limits; do not combine unrelated activities.
+Unknown items each contain exact requirementQuote and one concise singleGoal, not a compound request or a restatement
+of the whole JD. Provide only genuine unresolved goals. Program selects three distinct eligible goals by confirmed
+priority; all unselected unknowns remain. Do not write display points, titles, capability categories, ranks or grades.
+"""
+ROLE_INSTRUCTIONS['review'] = ROW_TEMPLATE_VERSION+"""
+Review criterionEvidence rows against all original sources and confirmed standards/HAT. Check entailment,
+source ownership, meaningful omissions, whole-criterion coverage and single-goal unknowns. Partial support need not
+prove every subpart. selectedUnknowns is program selection, not a claim that other unknowns are resolved. Never block
+merely because another retained unknown was not selected. Reject actual scope overreach, invented facts, wrong owners,
+dropped relevant sources and composite/duplicate goals. A finding names current criterionId, section and zero-based
+index (coverage uses null), full current statement and that item's requirementQuote. Coverage findings use an exact
+own-criterion substring. Factual objections cite original evidence.
+Judge actual stated scope, not stylistic repetition. Shared citations alone are harmless.
+Return approved=false only with a concrete current blocker; warnings/cosmetic changes do not block. No private reasoning.
+"""
+
+
+def row_template_migration(config):
+    """Read-only migration proposal; applying it requires explicit CAS settings activation."""
+    import difflib
+    import hashlib
+    result={'targetVersion':ROW_TEMPLATE_VERSION,'automaticMigration':False,'roles':{}}
+    for role in ('match','review'):
+        current=config['roles'][role]['systemPrompt'];target=ROLE_INSTRUCTIONS[role]
+        status='current' if current==target else 'known_previous_default' if current==LEGACY_ROW_TASKS[role] else 'custom_requires_review'
+        result['roles'][role]={'status':status,'currentSha256':hashlib.sha256(current.encode()).hexdigest(),
+            'targetSha256':hashlib.sha256(target.encode()).hexdigest(),
+            'condition':'Root reviews this exact diff, preserves custom instructions explicitly, then CAS-saves and activates a new version. No automatic replacement.',
+            'diff':''.join(difflib.unified_diff(current.splitlines(True),target.splitlines(True),fromfile=role+' saved task',tofile=role+' '+ROW_TEMPLATE_VERSION))}
+    return result
+
+
 def role_instructions(role):
     return COMMON+'\n'+(PROJECT_DOMAIN_RULE+'\n'+PRIOR_EXPERIENCE_RULE+'\n'+VERIFICATION_SCOPE_RULE+'\n'+STRUCTURED_EVIDENCE_RULE+'\n' if role in ('match','review') else '')+'Active role: '+role+'\n'+ROLE_INSTRUCTIONS[role]
 
 
 # Aggregate for offline policy inspection only. Provider sends just the active role.
-SYSTEM = COMMON+'\n'+PROJECT_DOMAIN_RULE+'\n'+PRIOR_EXPERIENCE_RULE+'\n'+VERIFICATION_SCOPE_RULE+'\n'+STRUCTURED_EVIDENCE_RULE+'\n'+'\n'.join(ROLE_INSTRUCTIONS.values())
+# Archived aggregate export for legacy fixtures; live requests use role_instructions.
+SYSTEM = COMMON+'\n'+'\n'.join(LEGACY_ROW_TASKS.values())+'\n'+'\n'.join(task for role,task in ROLE_INSTRUCTIONS.items() if role not in LEGACY_ROW_TASKS)

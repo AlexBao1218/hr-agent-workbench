@@ -279,3 +279,180 @@ def validate_review(review,data,analysis,standards):
 def repair_findings(review):
     return [f"[{f['subjectType']}:{f['subjectId']}] {f['message']} Current statement: {f['statement']}"
             for f in review['findings'] if f['severity']=='blocker']
+
+
+# v3 stays separate from the archived v2 decoder/projection above.
+def row_payload(document,standards,hat,context,feedback,profile):
+    """Full source text once; geometry stays in the server document/viewer."""
+    from .evidence import source_ownership_context
+    navigation=source_ownership_context(document,profile)
+    groups={}
+    for source in navigation['sources']:
+        key=(source['experienceId'],source['organization'],source['basis'],
+             tuple(r['blockId'] for r in source['headerEvidence']))
+        groups.setdefault(key,[]).append(source['blockId'])
+    ownership=[{'experienceId':eid,'organization':org,'basis':basis,
+                'headingBlockIds':list(headers),'blockIds':ids}
+               for (eid,org,basis,headers),ids in groups.items()]
+    return {'document':{'id':document['id'],'blocks':[{'id':b['id'],'text':b['text']} for b in document['blocks']]},
+            'standards':{'version':deepcopy(standards['version']),'criteria':deepcopy(standards['criteria'])},
+            'hat':deepcopy(hat),'context':deepcopy(context),'feedback':deepcopy(feedback),
+            'experiences':[{k:e[k] for k in ('id','organization','kind')} for e in profile['experiences']],
+            'sourceOwnership':{'groups':ownership,'policy':navigation['policy']}}
+
+
+def _row_order(data,standards):
+    criteria={c['id']:c for c in standards['criteria']}
+    return sorted(data['rows'],key=lambda r:(criteria[r['criterionId']]['group']!='must',criteria[r['criterionId']]['priority']))
+
+
+def validate_rows(data,standards,profile):
+    criteria={c['id']:c for c in standards['criteria']};rows=data['rows'];errors=[]
+    seen=[r['criterionId'] for r in rows]
+    if len(seen)!=len(set(seen)) or set(seen)!=criteria.keys():
+        return ['Rows must cover each confirmed criterion exactly once']
+    from .evidence import source_owners
+    experiences={e['id'] for e in profile['experiences']};owners=source_owners(profile)
+    for row in rows:
+        cid=row['criterionId'];criterion=criteria[cid]
+        states=[e['state'] for e in row['evidence']]
+        if any(not normalize_evidence(e['claim']) for e in row['evidence']):
+            errors.append('Candidate evidence needs a nonempty fact: '+cid)
+        if row['coverage'] in ('supported','partial') and not any(s in ('supported','partial') for s in states):
+            errors.append('Positive row requires source-backed support: '+cid)
+        if row['coverage']=='unknown' and states:
+            errors.append('Unknown row cannot also assert support/conflict; keep context in its unresolved item: '+cid)
+        if row['coverage']=='contradiction' and 'contradiction' not in states:
+            errors.append('Contradiction row requires an explicit conflicting source: '+cid)
+        # Alternatives may be overall supported with unknown/contradicted alternatives.
+        # Overall coverage is never replaced by max/min of child states.
+        for item in row['evidence']+row['unknowns']:
+            quote=normalize_evidence(item['requirementQuote'])
+            if not quote or not any(quote in normalize_evidence(criterion[k]) for k in ('description','jdQuote')):
+                errors.append('Row item must quote its own confirmed requirement exactly: '+cid)
+        for gap in row['unknowns']:
+            if not normalize_evidence(gap['singleGoal']):errors.append('Unknown requires one nonempty goal: '+cid)
+            if gap['experienceId'] is None:
+                if gap['evidence']:errors.append('Unanchored unknown must have empty evidence: '+cid)
+            elif (gap['experienceId'] not in experiences or not gap['evidence'] or
+                  any(len(owners.get(r['blockId'],[]))!=1 or owners[r['blockId']][0]['id']!=gap['experienceId'] for r in gap['evidence'])):
+                errors.append('Anchored unknown requires its actual experience and source: '+cid)
+    return list(dict.fromkeys(errors))
+
+
+def _row_fact_key(item):
+    return (normalize_evidence(item['claim']),tuple(sorted((r['blockId'],normalize_evidence(r['quote'])) for r in item['evidence'])))
+
+
+def _row_assessment(row,criterion):
+    return ('相关证据提供部分支持，其他未知项仍待确认。' if row['coverage']=='partial'
+            else '相关证据支持该项确认标准。')
+
+
+def project_rows(data,standards,profile):
+    """Public DTOs from row evidence; no candidate capability/title inference."""
+    errors=validate_rows(data,standards,profile)
+    empty={'observations':[],'matches':[],'concerns':[],'summary':'','keyUnknown':None}
+    if errors:return empty,[],[],[],errors
+    rows=_row_order(data,standards);criteria={c['id']:c for c in standards['criteria']}
+    result=deepcopy(empty);grounding=[];owners={};selected=[];seen_goals=set()
+    for row in rows:
+        cid=row['criterionId'];criterion=criteria[cid]
+        facts=row['evidence']
+        lines=[f['claim'].rstrip('。')+'。'+{'supported':'相关证据支持该标准片段。','partial':'相关证据仅部分支持该标准片段。',
+               'contradiction':'相关原文与该标准片段明确冲突。'}[f['state']]+'「'+f['requirementQuote']+'」' for f in facts]
+        lines += ['待确认：'+g['singleGoal'] for g in row['unknowns']]
+        if not lines:lines=['材料未提供该项标准的可用证据，待确认。']
+        result['observations'].append({'criterionId':cid,'coverage':row['coverage'],
+            'explanation':'\n'.join(lines),'evidence':_refs(r for f in facts+row['unknowns'] for r in f['evidence'])})
+        positive=[];seen_facts=set()
+        for fact in facts:
+            key=_row_fact_key(fact)
+            if fact['state'] in ('supported','partial') and key not in seen_facts:
+                positive.append(fact);seen_facts.add(key)
+        if row['coverage'] in ('supported','partial') and positive:
+            fresh=[f for f in positive if _row_fact_key(f) not in owners]
+            if not fresh:
+                point=owners[_row_fact_key(positive[0])]
+                if cid not in point['criterionIds']:point['criterionIds'].append(cid)
+                if row['coverage']=='partial':
+                    next(g for g in grounding if g['pointId']==point['id'])['assessment']=_row_assessment(row,criterion)
+                point['jdRequirement']='；'.join(criteria[i]['description'] for i in point['criterionIds'])
+                point['evidence']=_refs(point['evidence']+[r for f in positive for r in f['evidence']])
+            elif len(result['matches'])<6:
+                assessment=_row_assessment(row,criterion);claims=[]
+                # Reuse the existing display bound; never cut a fact/qualification.
+                # All evidence/claims remain complete in the row and observation.
+                for fact in fresh:
+                    proposed=[*claims,{'claim':fact['claim'],'evidence':deepcopy(fact['evidence'])}]
+                    if len('；'.join(f['claim'].rstrip('。；;') for f in proposed)+'。'+assessment)<=360:claims=proposed
+                if not claims:
+                    errors.append('No complete source-backed claim fits the existing 360-character display bound for '+cid+'; shorten the source-backed wording without dropping qualifications. Full row evidence is retained.')
+                else:
+                    point={'id':'match-'+cid,'title':criterion['title'],'criterionIds':[cid],
+                           'jdRequirement':criterion['description'],'explanation':'',
+                           'evidence':_refs(r for f in positive for r in f['evidence']),'kind':'match'}
+                    result['matches'].append(point)
+                    grounding.append({'pointId':point['id'],'focus':'other','capabilities':[],
+                        'scopeReason':'按确认标准逐项展示；不从标题或关键词推断独立能力归属。',
+                        'claims':claims,'assessment':assessment})
+                    for fact in claims:owners[_row_fact_key(fact)]=point
+        # Fully supported OR/preference alternatives are retained, not extra interview obligations.
+        if row['coverage']!='supported':
+            for index,gap in enumerate(row['unknowns']):
+                key=normalize_evidence(gap['singleGoal']).casefold()
+                if key in seen_goals:continue
+                seen_goals.add(key)
+                if len(selected)<3:selected.append({'criterionId':cid,'index':index})
+    targets=[]
+    by_id={r['criterionId']:r for r in rows}
+    for slot,choice in enumerate(selected):
+        cid=choice['criterionId'];row=by_id[cid];gap=row['unknowns'][choice['index']];criterion=criteria[cid]
+        conflicts=[r for f in row['evidence'] if f['state']=='contradiction' for r in f['evidence']]
+        point={'id':'unknown-'+cid+'-'+str(choice['index']),'title':criterion['title'][:29]+'待确认',
+            'criterionIds':[cid],'jdRequirement':criterion['description'],
+            'explanation':'待确认：'+gap['singleGoal'],'evidence':_refs(gap['evidence']+conflicts),
+            'kind':'gap' if row['coverage']=='contradiction' else 'verify'}
+        result['concerns'].append(point)
+        targets.append({'id':'target-'+str(slot+1),'pointId':point['id'],'criterionId':cid,
+            'singleGoal':gap['singleGoal'],'decisionReason':'按已确认标准的组别及优先级选择这一单目标；其他未知仍完整保留。',
+            'experienceId':gap['experienceId'],'evidence':deepcopy(gap['evidence'])})
+    if len(targets)!=3:errors.append('Fewer than three distinct eligible unresolved goals; do not invent gaps to fill slots')
+    result=reading_order(result,standards)
+    result['keyUnknown']=result['concerns'][0]['explanation'] if result['concerns'] else None
+    return result,grounding,targets,selected,errors
+
+
+def row_claim_grounding(data):
+    return [{'pointId':r['criterionId'],'claims':r['evidence']} for r in data['rows']]
+
+
+def validate_row_review(review,data,standards):
+    rows={r['criterionId']:r for r in data['rows']};criteria={c['id']:c for c in standards['criteria']};errors=[]
+    for finding in review['findings']:
+        cid=finding['criterionId'];row=rows.get(cid);section=finding['section'];index=finding['index']
+        if row is None:errors.append('Review references a missing current criterion');continue
+        item=None
+        if section=='coverage':
+            text=row['coverage'] if index is None else None
+        else:
+            items=row['evidence' if section=='evidence' else 'unknowns']
+            item=items[index] if type(index) is int and 0<=index<len(items) else None
+            text=item['claim' if section=='evidence' else 'singleGoal'] if item else None
+        if text is None or normalize_evidence(text)!=normalize_evidence(finding['statement']):
+            errors.append('Review must quote its complete current row subject: '+cid)
+        quote=normalize_evidence(finding['requirementQuote'])
+        if not quote or not any(quote in normalize_evidence(criteria[cid][k]) for k in ('description','jdQuote')):
+            errors.append('Review must quote its own confirmed requirement: '+cid)
+        if item and quote not in normalize_evidence(item['requirementQuote']):
+            errors.append('Review requirement must address this current item, not another retained subpart: '+cid)
+        if section=='evidence' and not finding['evidence']:
+            errors.append('Factual review objection requires original-source evidence: '+cid)
+    blockers=[f for f in review['findings'] if f['severity']=='blocker']
+    if not review['approved'] and not blockers:errors.append('Rejected row review requires a current concrete blocker')
+    return list(dict.fromkeys(errors))
+
+
+def row_repair_findings(review):
+    return [f"[{f['criterionId']}/{f['section']}/{f['index']}] {f['message']} Current statement: {f['statement']}"
+            for f in review['findings'] if f['severity']=='blocker']

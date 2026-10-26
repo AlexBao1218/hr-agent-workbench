@@ -170,7 +170,7 @@ def test_single_focus_and_component_ownership_are_structural(case,change):
 
 
 class StructuredStub:
-    mode='live';configured=True;model='offline-structured-stub'
+    mode='live';configured=True;model='offline-structured-stub';evidence_protocol=2
     def __init__(self,data):self.data=data;self.roles=[];self.match_payloads=[];self.review_payloads=[]
     def generate(self,role,payload,schema):
         self.roles.append(role)
@@ -373,3 +373,243 @@ def test_semantic_feedback_survives_a_deterministic_repair_failure(case,final_ap
     assert provider.roles==['match','review','match','match','review']+(['interview'] if final_approved else [])
     decisions=[e['_diagnostic'] for e in events if e.get('_diagnostic',{}).get('kind')=='review_decision']
     assert decisions[-1]['publishable'] is final_approved
+
+# Criterion rows v3. Fixtures below are explicit offline judgments, not model results.
+from hr_backend.schemas import CriterionRowsResult, CriterionRowsReview
+from hr_backend.structured_evidence import row_payload, validate_rows, project_rows, validate_row_review
+from hr_backend.prompts import ROW_TEMPLATE_VERSION, LEGACY_ROW_TASKS, row_template_migration
+
+
+@pytest.fixture
+def row_case(case):
+    doc,standards,hat,profile,graph=deepcopy(case)
+    components={c['id']:c for c in graph['components']};facts={f['id']:f for f in graph['facts']}
+    focus={f['componentId']:f for f in graph['focuses']}
+    rows=[]
+    for observation in graph['observations']:
+        evidence=[];unknowns=[]
+        for cid in observation['componentIds']:
+            component=components[cid]
+            if component['coverage']=='unknown':
+                f=focus[cid]
+                unknowns.append({'requirementQuote':component['requirementQuote'],
+                    'singleGoal':'是否有过「'+component['component']+'」的实际经历？','experienceId':f['experienceId'],'evidence':f['evidence']})
+            else:
+                for fid in component['factIds']:
+                    evidence.append({'requirementQuote':component['requirementQuote'],'state':component['coverage'],
+                                     'claim':facts[fid]['claim'],'evidence':facts[fid]['evidence']})
+        rows.append({'criterionId':observation['criterionId'],'coverage':observation['coverage'],'evidence':evidence,'unknowns':unknowns})
+    return doc,standards,hat,profile,CriterionRowsResult.model_validate({'rows':rows}).model_dump()
+
+
+class RowStub(StructuredStub):
+    evidence_protocol=3
+    def generate(self,role,payload,schema):
+        if role=='match':assert schema is CriterionRowsResult
+        if role=='review':assert schema is CriterionRowsReview
+        return super().generate(role,payload,schema)
+
+
+def row_render(row_case):
+    doc,standards,hat,profile,data=row_case
+    analysis,grounding,targets,selected,errors=project_rows(data,standards,profile)
+    assert not errors,errors
+    return compose_point_explanations(analysis,grounding),grounding,targets,selected
+
+
+def test_rows_program_titles_priority_single_goals_and_public_shape(row_case):
+    doc,standards,hat,profile,data=row_case
+    provider=RowStub(data);events=[]
+    result=Workflow(provider,max_repairs=0).analyze(doc,standards,hat,'r','c',profile=profile,trace_callback=events.append)
+    assert provider.roles==['match','review','interview'] and len(result['questions'])==3
+    assert [p['title'] for p in result['matches']]==[c['title'] for c in standards['criteria'][:2]]
+    assert set(result)=={'profile','observations','matches','concerns','summary','keyUnknown','questions','reviewed'}
+    initial=provider.match_payloads[0]
+    assert not set(initial)&{'profile','capabilityEvidenceIndex','sourceOwnershipContext','confirmedRequirementScope','repairScope','repairIssues','previousRows','previousStructuredEvidence'}
+    assert initial['document']['blocks']==[{'id':b['id'],'text':b['text']} for b in doc['blocks']]
+    assert 'jdText' not in initial['standards']
+    assert initial['context']=={'runId':'r','candidateId':'c','standardsVersion':'s1','hatVersion':'h1'}
+    assert initial['hat']['version']['id']=='h1'
+    assert provider.review_payloads[0]['criterionEvidence']==data
+    assert provider.review_payloads[0]['selectedUnknowns']==[{'criterionId':r['criterionId'],'index':0} for r in data['rows']]
+    assert not set(provider.review_payloads[0])&{'matches','pointGrounding','evidenceReview'}
+    schema=CriterionRowsResult.model_json_schema()
+    assert schema['required']==['rows'] and len(schema['$defs'])==4
+    assert all(e['_diagnostic']['publishable'] for e in events if e.get('_diagnostic',{}).get('kind')=='review_decision')
+    changed=deepcopy(row_case);changed[1]['criteria'][0]['priority']=1;changed[1]['criteria'][1]['priority']=0
+    analysis,_,targets,_=row_render(changed)
+    assert [p['criterionIds'] for p in analysis['matches']]==[['improve'],['duty']]
+    assert targets[0]['criterionId']=='improve'
+
+
+def test_rows_same_fact_multi_criterion_deduplicates_body_keeps_all_evidence(row_case):
+    changed=deepcopy(row_case);data=changed[4]
+    data['rows'][1]['evidence'].insert(0,{**deepcopy(data['rows'][0]['evidence'][0]),'requirementQuote':'测试检索效果'})
+    analysis,grounding,_,_=row_render(changed)
+    fact=data['rows'][0]['evidence'][0]['claim']
+    assert sum(p['explanation'].count(fact) for p in analysis['matches'])==1
+    assert all(fact in o['explanation'] for o in analysis['observations'][:2])
+    assert {r['blockId'] for p in analysis['matches'] for r in p['evidence']}=={'b1','b2'}
+    assert {r['blockId'] for r in analysis['matches'][1]['evidence']}=={'b1','b2'}
+
+
+def test_rows_overall_or_bonus_and_all_unknowns_preserved(row_case):
+    changed=deepcopy(row_case);doc,standards,_,profile,data=changed
+    criterion=standards['criteria'][-1]
+    criterion.update(description='本科在读或攻读硕士。',jdQuote='本科在读或攻读硕士。')
+    row=data['rows'][-1];row.update(coverage='supported',evidence=[{'requirementQuote':'本科在读','state':'supported',
+        'claim':'本科在读。','evidence':[{'blockId':'degree','quote':'Currently undergraduate.'}]}],
+        unknowns=[{'requirementQuote':'攻读硕士','singleGoal':'是否在攻读硕士？','experienceId':None,'evidence':[]}])
+    doc['blocks'].append({'id':'degree','text':'Currently undergraduate.'})
+    data['rows'][1]['unknowns'].append({'requirementQuote':'测试检索效果','singleGoal':'是否评估过检索效果的准确性？','experienceId':None,'evidence':[]})
+    assert not validate_rows(data,standards,profile)
+    analysis,_,_,selected=row_render(changed)
+    assert next(o for o in analysis['observations'] if o['criterionId']=='prior')['coverage']=='supported'
+    assert '是否在攻读硕士' in next(o for o in analysis['observations'] if o['criterionId']=='prior')['explanation']
+    assert not any(s['criterionId']=='prior' for s in selected)
+    assert criterion['group']=='bonus'  # No preference becomes a new must-have.
+    assert data['rows'][0]['coverage']=='partial'
+
+
+@pytest.mark.parametrize('change',['false_quote','wrong_owner','wrong_requirement','missing_criterion','false_conflict','unknown_positive'])
+def test_rows_fail_closed_on_source_scope_and_coverage_structure(row_case,change):
+    doc,standards,hat,profile,data=deepcopy(row_case)
+    if change=='false_quote':data['rows'][0]['evidence'][0]['evidence'][0]['quote']='Fabricated source.'
+    elif change=='wrong_requirement':data['rows'][0]['evidence'][0]['requirementQuote']=standards['criteria'][1]['description']
+    elif change=='missing_criterion':data['rows'].pop()
+    elif change=='false_conflict':data['rows'][-1]['coverage']='contradiction'
+    elif change=='unknown_positive':data['rows'][0]['coverage']='unknown'
+    else:
+        doc['blocks']=[{'id':'h1','text':'First Employer'},{'id':'b1','text':'Built a workflow prototype for inventory.'},
+                       {'id':'h2','text':'Second Employer'},{'id':'b2','text':'Tuned and tested retrieval.'},doc['blocks'][2]]
+        profile['experiences']=[{'id':eid,'organization':org,'role':'Intern','kind':'internship','start':None,'end':None,
+                                'summary':'','companyGroup':None,'evidence':[{'blockId':hid,'quote':org}]} for eid,org,hid in [('e1','First Employer','h1'),('e2','Second Employer','h2')]]
+        data['rows'][0]['evidence'][0]['claim']='Second Employer构建了库存流程原型。'
+    provider=RowStub(data)
+    with pytest.raises(WorkflowError,match='Deterministic validation did not pass'):
+        Workflow(provider,max_repairs=0).analyze(doc,standards,hat,'r','c',profile=profile)
+    assert provider.roles==['match']
+
+
+def test_rows_unknown_is_not_mismatch_and_fewer_real_goals_are_not_padded(row_case):
+    changed=deepcopy(row_case);changed[4]['rows'][2]['unknowns']=[]
+    analysis,_,targets,_,errors=project_rows(changed[4],changed[1],changed[3])
+    assert len(targets)==2 and any('do not invent gaps' in e for e in errors)
+    assert all(p['kind']!='gap' for p in analysis['concerns'])
+    assert analysis['observations'][-1]['coverage']=='unknown'
+    provider=RowStub(changed[4])
+    with pytest.raises(WorkflowError):Workflow(provider,max_repairs=0).analyze(*changed[:3],'r','c',profile=changed[3])
+    assert provider.roles==['match']
+
+
+def test_row_review_current_subjects_and_retained_unknowns(row_case):
+    data=row_case[4];standard=row_case[1]
+    review={'approved':False,'findings':[{'criterionId':'duty','section':'unknown','index':0,
+        'statement':data['rows'][0]['unknowns'][0]['singleGoal'],'requirementQuote':'对接HR系统','evidence':[],
+        'severity':'blocker','message':'Offline rejecting sentinel; do not auto-ignore review objections.'}]}
+    assert not validate_row_review(review,data,standard)
+    bad=deepcopy(review);bad['findings'][0]['statement']='Old or cropped goal'
+    assert validate_row_review(bad,data,standard)
+    assert validate_row_review({'approved':False,'findings':[]},data,standard)
+    class Reject(RowStub):
+        def generate(self,role,payload,schema):
+            if role=='review':
+                self.roles.append(role)
+                assert len(payload['criterionEvidence']['rows'])==3
+                return review
+            return super().generate(role,payload,schema)
+    provider=Reject(data)
+    with pytest.raises(WorkflowError,match='Evidence review did not pass'):
+        Workflow(provider,max_repairs=0).analyze(*row_case[:3],'r','c',profile=row_case[3])
+    assert provider.roles==['match','review']
+
+
+def test_template_migration_is_explicit_and_custom_tasks_are_not_overwritten(row_case):
+    from hr_backend.agent_settings import snapshot_settings
+    provider=RowStub(row_case[4]);state={};snapshot=snapshot_settings(state,provider)
+    original=deepcopy(snapshot)
+    snapshot['roles']['match']['systemPrompt']=LEGACY_ROW_TASKS['match']
+    snapshot['roles']['review']['systemPrompt']='User custom review instruction'
+    before=deepcopy(snapshot);report=row_template_migration(snapshot)
+    assert snapshot==before
+    assert report['roles']['match']['status']=='known_previous_default'
+    assert report['roles']['review']['status']=='custom_requires_review'
+    assert report['automaticMigration'] is False and report['roles']['match']['diff']
+    workflow=Workflow(provider,max_repairs=0);workflow.settings_resolver=lambda _:snapshot
+    with pytest.raises(WorkflowError,match='explicit reviewed'):
+        workflow.analyze(*row_case[:3],'r','c',profile=row_case[3])
+    assert provider.roles==[]
+    workflow.settings_resolver=lambda _:original
+    assert workflow.analyze(*row_case[:3],'r','c',profile=row_case[3])['reviewed']
+    assert original['roles']['match']['systemPrompt'].startswith(ROW_TEMPLATE_VERSION)
+
+
+def test_rows_api_store_restart_source_read_and_mixed_version_guard(row_case,tmp_path):
+    from fastapi.testclient import TestClient
+    from hr_backend.app import create_app
+    doc,standards,hat,profile,data=row_case
+    def parser(path,output_dir,document_id):
+        return {**deepcopy(doc),'id':document_id,'filename':'row.pdf','mimeType':'application/pdf','previewKind':'text','pages':[],'warnings':[]}
+    provider=RowStub(data);client=TestClient(create_app(tmp_path,provider,parser))
+    client.put('/api/standards/draft',json={k:standards[k] for k in ('jdText','criteria')})
+    confirmed=client.post('/api/standards/confirm',json={'actor':'offline rows test'}).json()['standards']
+    upload=client.post('/api/candidates',files={'files':('row.pdf',b'%PDF offline row fixture','application/pdf')}).json()
+    cid=upload['candidateIds'][0];detail=client.get('/api/candidates/'+cid).json()
+    assert detail['assessment']['reviewed'] and len(detail['assessment']['questions'])==3
+    assert detail['assessment']['standardsVersion']==confirmed['version']['id']
+    assert client.get(detail['document']['originalUrl']).content==b'%PDF offline row fixture'
+    reopened=TestClient(create_app(tmp_path,RowStub(data),parser))
+    assert reopened.get('/api/candidates/'+cid).json()['assessment']==detail['assessment']
+    state=reopened.app.state.store.read();assessment=state['assessments'][detail['assessment']['id']]
+    assert assessment['standardsVersion']==state['standards']['version']['id']
+    # A mismatched current HAT cannot expose the saved assessment as current.
+    with reopened.app.state.store.transaction() as current:
+        current['hat']['version']['id']='different-confirmed-hat'
+    assert reopened.get('/api/candidates/'+cid).json()['candidate']['grade']=='pending'
+
+
+def test_fully_shared_partial_row_does_not_upgrade_display_support(row_case):
+    changed=deepcopy(row_case);data=changed[4]
+    data['rows'][0]['coverage']='supported'
+    data['rows'][1]['evidence']=[{**deepcopy(data['rows'][0]['evidence'][0]),'requirementQuote':'测试检索效果'}]
+    analysis,grounding,_,_,errors=project_rows(data,changed[1],changed[3])
+    assert errors==['Fewer than three distinct eligible unresolved goals; do not invent gaps to fill slots']
+    analysis=compose_point_explanations(analysis,grounding)
+    assert len(analysis['matches'])==1
+    assert analysis['matches'][0]['criterionIds']==['duty','improve']
+    assert '部分支持' in analysis['matches'][0]['explanation']
+    assert [o['coverage'] for o in analysis['observations']]==['supported','partial','unknown']
+
+
+def test_row_single_oversized_claim_returns_actionable_error_without_empty_match(row_case):
+    doc,standards,hat,profile,data=deepcopy(row_case)
+    # Direct projection guard also handles imported/legacy oversized values;
+    # current live schema already bounds an individual claim to180 characters.
+    long_claim='保留原文中的研究、提议和现场试点限定，不能表述为已实现的生产收益。'*16
+    data['rows'][0]['evidence'][0]['claim']=long_claim
+    before=deepcopy(data)
+    analysis,grounding,_,_,errors=project_rows(data,standards,profile)
+    assert any('No complete source-backed claim fits' in e and 'duty' in e for e in errors)
+    assert all(p['criterionIds']!=['duty'] for p in analysis['matches'])
+    assert all(g['claims'] for g in grounding)
+    assert long_claim in analysis['observations'][0]['explanation']
+    assert data==before  # Neither source-backed wording nor qualifications were cut.
+
+
+def test_row_only_narrated_facts_get_owner_so_later_criterion_can_display_remainder(row_case):
+    changed=deepcopy(row_case);data=changed[4]
+    first='首项实际活动。'+'甲'*155+'；属于研究而不是生产交付。'
+    second='另一项实际活动。'+'乙'*155+'；收益仍为提议而非已经实现。'
+    assert len(first)<=180 and len(second)<=180
+    a=deepcopy(data['rows'][0]['evidence'][0]);a['claim']=first
+    b=deepcopy(data['rows'][1]['evidence'][0]);b['claim']=second
+    data['rows'][0]['evidence']=[a,{**deepcopy(b),'requirementQuote':'梳理业务流程'}]
+    data['rows'][1]['evidence']=[b]
+    analysis,grounding,_,_=row_render(changed)
+    assert [g['claims'][0]['claim'] for g in grounding]==[first,second]
+    assert all(len(g['claims'])==1 for g in grounding)
+    assert analysis['matches'][0]['criterionIds']==['duty']
+    assert analysis['matches'][1]['criterionIds']==['improve']
+    assert {r['blockId'] for r in analysis['matches'][0]['evidence']}=={'b1','b2'}
+    assert second in analysis['matches'][1]['explanation']
+    assert len(analysis['matches'][0]['explanation'])<=360
