@@ -2671,7 +2671,6 @@ select:disabled {
 .product-shell .card-grade-reason { white-space: nowrap; }
 .product-shell .criteria-panel > .criteria-edit { margin-top: 20px; }
 
-.detail-navigation .detail-remove { color: #94534a; background: white; border-color: #dfccc6; }
 .remove-candidate-dialog { width: min(420px, calc(100vw - 32px)); padding: 24px; border: 1px solid #d7e2dc; color: #203a30; }
 .remove-candidate-dialog::backdrop { background: #102e254d; }
 .remove-candidate-dialog h2 { margin: 0 0 16px; font-size: 20px; }
@@ -2680,10 +2679,14 @@ select:disabled {
 .remove-candidate-dialog footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
 .remove-candidate-dialog .danger-action { background: #9b4c40; border-color: #9b4c40; color: white; }
 .remove-error { color: #9b4c40; overflow-wrap: anywhere; }
-.removed-candidates { margin: 0 0 16px; font-size: 12px; color: #687b71; }
-.removed-candidates > summary { cursor: pointer; width: fit-content; margin-left: auto; }
-.removed-candidates[open] { padding: 12px 16px; border: 1px solid #dce5df; background: white; }
-.removed-candidates p { margin: 12px 0 0; }
-.removed-candidate-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 12px; }
-.removed-candidate-row > span { min-width: 0; overflow-wrap: anywhere; }
-.removed-candidate-row > button { flex-shrink: 0; }
+
+/* Keep deletion on the card, separate from opening the resume. */
+.product-shell .candidate-card { --card-name-height: 78px; }
+.product-shell .card-name strong { flex: 1; }
+.card-header-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.product-shell .card-name .card-hr-mark { margin-right: 0; padding: 5px 9px 5px 14px; }
+.card-delete-action { display: flex; }
+.product-shell .card-delete { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 30px; min-height: 30px; padding: 0; border: 1px solid transparent; background: transparent; color: #87948d; }
+.product-shell .card-delete:hover, .product-shell .card-delete:focus-visible { color: #9b4c40; border-color: #e2c9c3; background: #fff6f3; }
+.remove-candidate-dialog { cursor: default; text-align: left; }
+.product-shell .candidate-card { height: auto; min-height: calc(var(--card-name-height) + var(--card-education-height) + var(--card-match-height) + var(--card-internships-height) + 2px); grid-template-rows: minmax(var(--card-name-height), auto) var(--card-education-height) var(--card-match-height) var(--card-internships-height); }

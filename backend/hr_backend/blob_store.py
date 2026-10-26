@@ -133,6 +133,11 @@ class LocalBlobStore:
     def exists(self, relative_key: str) -> bool:
         return self._path(relative_key).is_file()
 
+    def delete_many(self, keys: list[str]) -> None:
+        paths = [self._path(key) for key in keys]
+        for path in paths:
+            path.unlink(missing_ok=True)
+
 
 class SupabaseBlobStore(LocalBlobStore):
     """Backend-only private bucket client. Root contains replaceable cache files.
@@ -257,3 +262,16 @@ class SupabaseBlobStore(LocalBlobStore):
             return True
         except BlobNotFoundError:
             return False
+
+    def delete_many(self, keys: list[str]) -> None:
+        keys = list(dict.fromkeys(_key(key) for key in keys))
+        for key in keys: self._path(key)
+        for start in range(0, len(keys), 100):
+            try:
+                response = self._client.request('DELETE', self._base + self._bucket,
+                                                json={'prefixes': keys[start:start+100]})
+            except httpx.HTTPError:
+                raise BlobStoreError('Private file deletion failed; retry deletion after restoring storage connectivity.') from None
+            if response.status_code not in (200, 204):
+                raise BlobStoreError('Private file deletion failed; retry deletion after restoring storage connectivity.')
+        super().delete_many(keys)

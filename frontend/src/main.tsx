@@ -34,7 +34,7 @@ import { HrReviewEditor, hrDecisionLabels } from "./HrReviewEditor";
 import { StandardsList } from "./StandardsList";
 import { useDocumentGestures } from "./useDocumentGestures";
 import { RunProgress, CandidateRunProgress, hasCandidateProgress, isInputLimitError, runErrorMessage } from "./RunProgress";
-import { RemoveCandidate, RemovedCandidates } from "./CandidateRemoval";
+import { DeleteCandidate } from "./CandidateRemoval";
 const grades = {
   A: "建议立即约面",
   B: "可备选",
@@ -372,7 +372,6 @@ function App() {
                     </div>
 
 
-                    <RemovedCandidates onRestored={refresh} />
                     {(["A", "B", "C", "pending"] as const).filter(group=>group!=='pending'||candidates.some(candidate=>boardGroup(candidate)==='pending')).map((g) => (
                       <section className="grade-group" key={g} id={`grade-${g}`}>
                         <h2 className="grade-heading">
@@ -392,6 +391,10 @@ function App() {
                                 key={c.id}
                                 c={c}
                                 run={run}
+                                onDeleted={async () => {
+                                  setList(current => current ? {...current,candidates:current.candidates.filter(candidate=>candidate.id!==c.id)} : current);
+                                  try { await refresh(); } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+                                }}
                                 open={() => openCandidate(c.id)}
                               />
                             ))}
@@ -436,11 +439,7 @@ function App() {
                 refresh={refresh}
                 run={run}
                 activeRunId={workspace.activeRunId || list?.activeRunId || null}
-                onRemoved={async (id) => {
-                  setList(current => current ? {...current,candidates:current.candidates.filter(candidate => candidate.id !== id)} : current);
-                  navigate('/');
-                  try { await refresh(); } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
-                }}
+
               />
             ) : (
               <div className="empty">
@@ -499,7 +498,7 @@ function cardLabel(value: string) {
   if (stack.length || !hasPair) return value;
   return output.replace(/\s+/g, " ").trim() || value;
 }
-function Card({ c, open, run }: { c: CandidateCard; open: () => void; run: Run | null }) {
+function Card({ c, open, run, onDeleted }: { c: CandidateCard; open: () => void; run: Run | null; onDeleted: () => Promise<void> }) {
   const gradeReason = c.grade !== "pending" && c.assessmentStatus === "current" ? c.gradeReason : undefined;
   const internships =
     c.profile?.experiences
@@ -508,10 +507,10 @@ function Card({ c, open, run }: { c: CandidateCard; open: () => void; run: Run |
         (b.end || b.start || "").localeCompare(a.end || a.start || ""),
       ) || [];
   return (
-    <article id={`card-${c.id}`} className="candidate-card" tabIndex={0} aria-label={`查看 ${c.name} 详情`} onClick={open} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open(); } }}>
+    <article id={`card-${c.id}`} className="candidate-card" tabIndex={0} aria-label={`查看 ${c.name} 详情`} onClick={() => { if (!c.deletionPending) open(); }} onKeyDown={event => { if (!c.deletionPending && event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open(); } }}>
       <div className="card-name">
         <strong>{c.name}</strong>
-        <span className="card-hr-mark" data-decision={c.hrReview?.decision || 'unreviewed'} aria-label={`HR 评价：${c.hrReview?.decision ? hrDecisionLabels[c.hrReview.decision] : '未评价'}`}><small>HR</small>{c.hrReview?.decision ? hrDecisionLabels[c.hrReview.decision] : '未评价'}</span>
+        <div className="card-header-actions"><span className="card-hr-mark" data-decision={c.hrReview?.decision || 'unreviewed'} aria-label={`HR 评价：${c.hrReview?.decision ? hrDecisionLabels[c.hrReview.decision] : '未评价'}`}><small>HR</small>{c.hrReview?.decision ? hrDecisionLabels[c.hrReview.decision] : '未评价'}</span><DeleteCandidate candidate={c} onDeleted={onDeleted} /></div>
       </div>
       <div className="card-education">
         {c.fictional && <span className="card-fictional">虚构示例</span>}
@@ -537,11 +536,11 @@ function Card({ c, open, run }: { c: CandidateCard; open: () => void; run: Run |
               ? " · 待复核"
               : ""}</span>
           <div className="card-match-status">
-            <CandidateRunProgress candidate={c} run={run} />
+            {!c.deletionPending && <CandidateRunProgress candidate={c} run={run} />}
             {gradeReason && <span className="card-grade-reason" data-reason={gradeReason.code} title={gradeReason.explanation} aria-label={`${c.grade} 级：${gradeReason.label}。${gradeReason.explanation}`}>{c.grade} · {gradeReason.label}</span>}
           </div>
         </div>
-        <div className="card-match-copy"><p className="card-summary">{c.stage === 'failed' || c.stage === 'needs_attention' ? (c.assessmentStatus === 'stale' ? '新标准下的分析尚未完成，上一版结果待更新。' : '分析尚未完成，请查看运行进度。') : c.error || c.display?.summary || (c.matchSummary.startsWith('相关证据：') ? c.matchSummary.slice('相关证据：'.length) : c.matchSummary) || stageLabels[c.stage]}</p></div>
+        <div className="card-match-copy"><p className="card-summary">{c.deletionPending ? "删除未完成，请点击右上角垃圾桶重试。" : c.stage === 'failed' || c.stage === 'needs_attention' ? (c.assessmentStatus === 'stale' ? '新标准下的分析尚未完成，上一版结果待更新。' : '分析尚未完成，请查看运行进度。') : c.error || c.display?.summary || (c.matchSummary.startsWith('相关证据：') ? c.matchSummary.slice('相关证据：'.length) : c.matchSummary) || stageLabels[c.stage]}</p></div>
       </div>
       <div className="card-internships">
         <span className="muted">实际实习 · {internships.length} 段</span>
@@ -1051,7 +1050,6 @@ function Detail({
   refresh,
   activeRunId,
   run,
-  onRemoved,
 }: {
   workspace: Workspace;
   id: string;
@@ -1062,7 +1060,6 @@ function Detail({
   refresh: () => Promise<void>;
   activeRunId: string | null;
   run: Run | null;
-  onRemoved: (id: string) => Promise<void>;
 }) {
   const [detail, setDetail] = useState<CandidateDetail | null>(null);
   const [error, setError] = useState("");
@@ -1238,7 +1235,6 @@ function Detail({
               重新分析
             </button>
             <HrReviewEditor key={c.id} candidateId={c.id} value={c.hrReview} onSaved={async hrReview=>{setDetail(current=>current?.candidate.id===c.id?{...current,candidate:{...current.candidate,hrReview}}:current);await refresh();}} />
-            <RemoveCandidate candidate={c} disabled={busy} onRemoved={()=>onRemoved(c.id)} />
         </div>
       </nav>
       <div className="detail-heading">

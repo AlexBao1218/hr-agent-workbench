@@ -44,3 +44,13 @@ class Store:
     def read(self):
         with self.lock:
             return json.loads(self.db.execute('SELECT body FROM state WHERE id=1').fetchone()[0])
+
+    def delete_candidate_diagnostics(self, candidate_id, owned_run_ids):
+        removed = set()
+        directory = self.root/'diagnostics'
+        for path in directory.glob('*.json'):
+            artifact = json.loads(path.read_text())
+            if artifact.get('candidateId') == candidate_id or artifact.get('runId') in owned_run_ids:
+                removed.add(str(path.relative_to(self.root)))
+                path.unlink(missing_ok=True)
+        return removed

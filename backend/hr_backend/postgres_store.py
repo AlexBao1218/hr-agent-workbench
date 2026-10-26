@@ -171,3 +171,9 @@ class PostgresStore:
                     pass
                 finally:
                     self.db = None
+
+    def delete_candidate_diagnostics(self, candidate_id, owned_run_ids):
+        with self.sql_transaction() as cursor:
+            cursor.execute("DELETE FROM hr_private.diagnostics WHERE run_id = ANY(%s) OR convert_from(content,'UTF8')::jsonb->>'candidateId' = %s RETURNING reference",
+                           (owned_run_ids, candidate_id))
+            return {row[0] for row in cursor.fetchall()}

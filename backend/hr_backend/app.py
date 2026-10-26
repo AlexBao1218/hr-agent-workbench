@@ -17,6 +17,7 @@ from .policy import rank, grade_reason, POLICY_VERSION
 from .agent_settings import snapshot_settings, cv_settings_hash
 from .agent_workbench import install_workbench
 from .diagnostics import write_diagnostic
+from .candidate_deletion import delete_candidate
 from .display import DisplayProjection
 from .evidence import reading_order
 
@@ -172,11 +173,13 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         result=dict(id=c['id'],name=(c.get('profile') or {}).get('name') or c['name'],fictional=c['fictional'],documentId=c['documentId'],profile=profile,stage=c['stage'],grade=a['grade'] if current else 'pending',rank=None,matchSummary=a['summary'] if a else '',keyUnknown=a.get('keyUnknown') if a else None,assessmentStatus=a['status'] if a else 'none',standardsVersion=a['standardsVersion'] if a else None,hatVersion=a['hatVersion'] if a else None,error=c.get('error'))
         if current and a.get('policyVersion')==POLICY_VERSION:result['gradeReason']=grade_reason(s['standards']['criteria'],a['observations'],a['reviewed'])[1]
         result['hrReview']=copy.deepcopy(c.get('hrReview') or {'decision':None,'note':'','updatedAt':None})
+        if c.get('_deletePending'):
+            result.update(deletionPending=True,stage='needs_attention',grade='pending',error='删除未完成，请点击右上角垃圾桶重试。')
         display=display_projection.get(s,c) if display is ... else display
         if display is not None:result['display']=display['card']
         return result
     def listing(s):
-        cards=[card(s,c) for c in s['candidates'].values() if not c.get('removedAt')]
+        cards=[card(s,c) for c in s['candidates'].values() if not c.get('removedAt') or c.get('_deletePending')]
         def key(c):
             a=s['assessments'].get(s['candidates'][c['id']].get('assessmentId'))
             return ({'A':0,'B':1,'C':2,'pending':3}[c['grade']],-a['rankValue'] if a else 0,c['id'])
@@ -201,8 +204,9 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         return identity
     def trace(rid,event):
         with store.transaction() as s:
-            run=s['runs'][rid]
             cid=event.get('candidateId');candidate=s['candidates'].get(cid)
+            if rid not in s['runs'] or (cid and not candidate):raise ApiFailure('candidate_deleted','简历已删除，本次处理已停止。',409)
+            run=s['runs'][rid]
             expected=run.get('_inputs',{}).get('generations',{}).get(cid)
             if candidate and (candidate.get('removedAt') or (expected is not None and candidate.get('_lastRemovalGeneration',0)>expected)):
                 raise ApiFailure('stale_candidate','简历已移除，本次处理已停止。',409)
@@ -231,6 +235,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             else:run['steps'].append(step)
     def finish_run(rid,errors):
         with store.transaction() as s:
+            if rid not in s['runs']:return
             s['runs'][rid].update(status='failed' if errors else 'succeeded',error='; '.join(errors) if errors else None)
             if s['activeRunId']==rid:s['activeRunId']=None
     def public_document(doc):
@@ -269,7 +274,8 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         grade,value=rank(standards['criteria'],result['observations'],result['reviewed'])
         assessment=dict(id=uid(),candidateId=cid,runId=rid,standardsVersion=standards['version']['id'],hatVersion=hat['version']['id'],mode=provider.mode,status='current' if result['reviewed'] else 'review_required',grade=grade,rankValue=value,summary=result['summary'],keyUnknown=result.get('keyUnknown'),observations=result['observations'],matches=result['matches'],concerns=result['concerns'],questions=result['questions'],reviewed=result['reviewed'],createdAt=now(),policyVersion=POLICY_VERSION,gradeReason=grade_reason(standards['criteria'],result['observations'],result['reviewed'])[1])
         with store.transaction() as t:
-            latest=t['standards']; cc=t['candidates'][cid]
+            latest=t['standards']; cc=t['candidates'].get(cid)
+            if cc is None:return False
             eligible=not cc.get('removedAt') and cc['generation']==generations[cid] and hat['version']['id']==t['hat']['version']['id'] and same_meaning(standards,latest)
             if binding_check is not None:eligible=eligible and binding_check(t)
             if eligible:
@@ -294,34 +300,40 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         return eligible
     def process(rid,cids,standards,hat,generations):
         with store.transaction() as s:
+            if rid not in s['runs']:return
             s['runs'][rid]['status']='running'
             s['runs'][rid]['_inputs']={'standards':standards,'hat':hat,'candidateIds':cids,'generations':generations}
         errors=[]
         for cid in cids:
             try:
-                s=store.read(); c=s['candidates'][cid]; doc=s['documents'][c['documentId']]
+                s=store.read(); c=s['candidates'].get(cid)
+                if c is None:continue
+                doc=s['documents'][c['documentId']]
                 if doc['status']!='ready' or (doc['filename'].lower().endswith('.docx') and doc.get('_docxIntegrityVersion')!='complete-source-v1'):
                     with store.transaction() as t:
-                        if t['candidates'][cid]['generation']!=generations[cid]:continue
+                        if cid not in t['candidates'] or t['candidates'][cid]['generation']!=generations[cid]:continue
                         t['candidates'][cid]['stage']='parsing'
-                    doc=parse_file(doc)
-                    with store.transaction() as t: t['documents'][doc['id']]=doc
+                    with store.lock:
+                        latest=store.read()['candidates'].get(cid)
+                        if latest is None or latest.get('removedAt') or latest['generation']!=generations[cid]:continue
+                        doc=parse_file(doc)
+                        with store.transaction() as t: t['documents'][doc['id']]=doc
                 if doc['status']!='ready' or not doc['blocks']:
                     raise ApiFailure('document_not_ready','Document needs attention: '+'; '.join(doc.get('warnings',[])))
                 if not standards:
                     with store.transaction() as t:
-                        if t['candidates'][cid]['generation']==generations[cid]:t['candidates'][cid].update(stage='uploaded',error=None)
+                        if cid in t['candidates'] and t['candidates'][cid]['generation']==generations[cid]:t['candidates'][cid].update(stage='uploaded',error=None)
                     continue
                 require_provider()
                 with store.transaction() as t:
-                    if t['candidates'][cid]['generation']!=generations[cid]:continue
+                    if cid not in t['candidates'] or t['candidates'][cid]['generation']!=generations[cid]:continue
                     t['candidates'][cid]['stage']='analyzing'
                 result=workflow.analyze(doc,standards,hat,rid,cid,feedback=s['feedback'].get(cid,[]),profile=c.get('profile') if provider.mode=='live' and not any(f['status']=='rechecking' for f in s['feedback'].get(cid,[])) and c.get('profileSource')==profile_identity(doc,standards,hat) and c.get('_cvSettingsHash')==cv_settings_hash(s['runs'][rid].get('_agentSettings')) else None,trace_callback=lambda event:trace(rid,event))
                 publish_result(rid,cid,doc,standards,hat,generations,result)
             except Exception as exc:
                 message=safe_error(exc); errors.append(message)
                 with store.transaction() as t:
-                    if t['candidates'][cid]['generation']==generations[cid]:
+                    if cid in t['candidates'] and t['candidates'][cid]['generation']==generations[cid]:
                         t['candidates'][cid].update(stage='needs_attention',error=message)
                         for f in t['feedback'].get(cid,[]):
                             if f['status']=='rechecking': f['status']='needs_review'
@@ -498,13 +510,13 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             snapshot=store.read()
             for candidate in snapshot['candidates'].values():
                 if snapshot['documents'][candidate['documentId']]['hash']==digest:
-                    if candidate.get('removedAt'):raise ApiFailure('candidate_removed','该简历已移除，可在“已移除”中恢复。',409)
+                    if candidate.get('removedAt'):raise ApiFailure('candidate_removed','该简历正在删除，请完成删除后重新上传。',409)
                     return candidate['id'],False
             blobs.put_bytes(key,data,MIMES[suffix])
         with store.transaction() as s:
             for c in s['candidates'].values():
                 if s['documents'][c['documentId']]['hash']==digest:
-                    if c.get('removedAt'):raise ApiFailure('candidate_removed','该简历已移除，可在“已移除”中恢复。',409)
+                    if c.get('removedAt'):raise ApiFailure('candidate_removed','该简历正在删除，请完成删除后重新上传。',409)
                     return c['id'],False
             if not remote:
                 target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
@@ -546,31 +558,14 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         return dict(candidateIds=ids,runId=rid,errors=errors)
     @app.get('/api/candidates')
     def candidates():return listing(store.read())
-    @app.get('/api/removed-candidates')
-    def removed_candidates():
-        values=[{'id':c['id'],'name':(c.get('profile') or {}).get('name') or c['name'],'removedAt':c['removedAt']}
-                for c in store.read()['candidates'].values() if c.get('removedAt')]
-        return {'candidates':sorted(values,key=lambda c:c['removedAt'],reverse=True)}
     @app.delete('/api/candidates/{cid}')
-    def remove_candidate(cid:str):
-        with store.transaction() as s:
-            if cid not in s['candidates']:raise ApiFailure('not_found','Candidate not found',404)
-            candidate=s['candidates'][cid]
-            if not candidate.get('removedAt'):
-                candidate['removedAt']=now();candidate['generation']+=1
-                candidate['_lastRemovalGeneration']=candidate['generation']
-            return {'candidateId':cid,'removedAt':candidate['removedAt']}
-    @app.post('/api/candidates/{cid}/restore')
-    def restore_candidate(cid:str):
-        with store.transaction() as s:
-            if cid not in s['candidates']:raise ApiFailure('not_found','Candidate not found',404)
-            candidate=s['candidates'][cid]
-            if candidate.get('removedAt'):
-                candidate.pop('removedAt');candidate['generation']+=1
-                assessment=s['assessments'].get(candidate.get('assessmentId'))
-                current=assessment and assessment['status']=='current' and assessment['reviewed'] and s['standards'] and assessment['standardsVersion']==s['standards']['version']['id'] and assessment['hatVersion']==s['hat']['version']['id']
-                candidate.update(stage='ready' if current else 'needs_attention',error=None if current else '已恢复，请重新分析以更新结果。')
-            return {'candidateId':cid}
+    def permanently_delete_candidate(cid:str,permanent:bool=False):
+        if not permanent:raise ApiFailure('confirmation_required','删除方式已更新，请刷新页面后确认永久删除。',409)
+        try:
+            if not delete_candidate(store,blobs,cid):raise ApiFailure('not_found','Candidate not found',404)
+        except ApiFailure:raise
+        except Exception:raise ApiFailure('deletion_failed','删除未完成，请重试删除；不会显示为已删除成功。',503)
+        return {'candidateId':cid,'deleted':True}
     @app.get('/api/candidates/{cid}')
     def detail(cid:str):
         s=store.read();c=get_candidate(s,cid)
@@ -592,7 +587,9 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def chat(cid:str,body:TextInput):
         require_provider();s=store.read();c=get_candidate(s,cid)
         user=dict(id=uid(),role='user',text=body.message,evidence=[],createdAt=now())
-        with store.transaction() as t:t['chats'].setdefault(cid,[]).append(user)
+        with store.transaction() as t:
+            get_candidate(t,cid)
+            t['chats'].setdefault(cid,[]).append(user)
         assessment=s['assessments'].get(c.get('assessmentId'))
         if not assessment or assessment['status']!='current' or assessment['standardsVersion']!=(s['standards'] or {}).get('version',{}).get('id') or assessment['hatVersion']!=s['hat']['version']['id']:
             assessment=None
@@ -602,6 +599,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         except Exception as exc:raise ApiFailure('model_failed',safe_error(exc),503)
         answer=dict(id=uid(),role='assistant',text=result['text'],evidence=result['evidence'],createdAt=now())
         with store.transaction() as t:
+            get_candidate(t,cid)
             if t['candidates'][cid]['generation']!=c['generation'] or (t['standards'] or {}).get('version')!=(s['standards'] or {}).get('version') or t['hat']['version']['id']!=s['hat']['version']['id']:
                 raise ApiFailure('stale_context','Candidate analysis or standards changed while answering; retry your message against the current version.',409)
             t['chats'].setdefault(cid,[]).append(answer)
