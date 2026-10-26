@@ -25,19 +25,24 @@ class WorkflowError(RuntimeError):
 def normalized(text):
     return ' '.join(unicodedata.normalize('NFKC', text).split())
 
-def validate_refs(value, document):
+def validate_refs(value, document, detailed=False):
     """Every supplied quote must be a contiguous normalized exact substring."""
-    blocks={b['id']:normalized(b['text']) for b in document.get('blocks',[])}
+    raw_blocks={b['id']:b['text'] for b in document.get('blocks',[])}
+    blocks={key:normalized(text) for key,text in raw_blocks.items()}
     errors=[]
-    def walk(v):
+    def walk(v,path=''):
         if isinstance(v,dict):
             if 'blockId' in v:
                 quote=normalized(v.get('quote',''))
                 if not quote or v['blockId'] not in blocks or quote not in blocks[v['blockId']]:
-                    errors.append('Invalid source reference or quote')
-            for child in v.values(): walk(child)
+                    message='Invalid source reference or quote'
+                    if detailed:
+                        message+=' at '+path+': '+json.dumps({'reference':v,'originalBlock':raw_blocks.get(v['blockId']),
+                            'correction':'Copy a contiguous exact original substring, preserving internal word spacing. A sentence spanning blocks needs separate blockId/quote references; do not join text under one ID.'},ensure_ascii=False)
+                    errors.append(message)
+            for key,child in v.items(): walk(child,path+'.'+key)
         elif isinstance(v,list):
-            for child in v: walk(child)
+            for index,child in enumerate(v): walk(child,path+'.'+str(index))
     walk(value)
     return errors
 
@@ -240,11 +245,15 @@ class Workflow:
             return {}
 
         def cv_node(state):
-            result=deepcopy(profile) if profile is not None else self._call('cv',payload,CandidateProfile,trace_callback,defer_success=True)
+            result=deepcopy(profile) if profile is not None else self._call('cv',{'document':payload['document'],'hat':payload['hat'],'context':context},CandidateProfile,trace_callback,defer_success=True)
             result=CandidateProfile.model_validate(result).model_dump()
             # Group is reserved for HR configuration, even when the CV or cached model supplies it.
             for experience in result['experiences']: experience['companyGroup']=None
             errors=validate_refs(result,document)
+            if self.provider.mode=='live':
+                for language in result['languages']:
+                    if not any(normalized(language) in normalized(b['text']) for b in document['blocks']):
+                        errors.append('Language entries must preserve an exact original proficiency phrase; no inference from JD, name or teaching language')
             for item in result['education']+result['experiences']:
                 if not item['evidence']: errors.append('Profile history requires evidence')
             if errors:
@@ -396,14 +405,16 @@ class Workflow:
         try:
             data=self._call('match',current,CriterionRowsResult,callback,attempt,defer_success=True)
             analysis,grounding,targets,selected,errors=project_rows(data,standards,state['profile'])
-            errors+=validate_refs(data,document)
+            errors+=validate_refs(data,document,detailed=True)
             errors+=validate_source_ownership({'observations':[],'concerns':[]},row_claim_grounding(data),document,state['profile'])
             if not errors:
                 analysis=compose_point_explanations(analysis,grounding)
                 errors+=validate_analysis(analysis,document,standards)
                 errors+=validate_point_grounding(analysis,grounding,require_facts=True)
                 errors+=validate_verification_targets(targets,analysis,standards,state['profile'])+validate_refs(targets,document)
-                errors+=validate_source_ownership(analysis,grounding,document,state['profile'])
+                # Every row fact was checked above. Derived multi-employer observations must not be reinterpreted
+                # as one employer merely because only one of their printed abbreviations was recognized.
+                errors+=validate_source_ownership({'observations':[],'concerns':analysis['concerns']},grounding,document,state['profile'])
                 errors+=validate_presentation(analysis)
                 analysis['summary']=identity_free_summary(analysis,standards)
         except ProviderError as exc:
@@ -430,7 +441,7 @@ class Workflow:
         _,_,_,selected,_=project_rows(state['structuredEvidence'],standards,state['profile'])
         current['selectedUnknowns']=selected
         review=self._call('review',current,CriterionRowsReview,callback,attempt,defer_success=True)
-        contract_errors=validate_row_review(review,state['structuredEvidence'],standards)+validate_refs(review,document)
+        contract_errors=validate_row_review(review,state['structuredEvidence'],standards,require_checks=True)+validate_refs(review,document)
         issues=row_repair_findings(review);approved=review['approved'] and not issues and not contract_errors
         self._event(callback,context,'review','succeeded' if approved else 'failed',attempt,'Criterion evidence review passed' if approved else 'Criterion evidence review rejected publication')
         self._diagnostic(callback,context,'review',attempt,{'kind':'review_decision','evidenceProtocol':3,

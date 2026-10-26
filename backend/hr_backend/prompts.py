@@ -72,7 +72,15 @@ threshold absent from JD. Preserve original JD and its meaning.''',
 'cv': '''Extract source-backed name, education, experiences, languages and availability. Each history item
 needs exact evidence. companyGroup is always null (HR config only). Summaries must not combine company
 background with an unspecified project's domain/team. Preserve genuine uncertainty; never invent experience,
-HR projects, achievements, dates or graduation. Research projects are not employment.''',
+HR projects, achievements, dates or graduation. Research projects are not employment.
+Use internship only when the original role or section explicitly identifies an intern/internship/industrial trainee.
+A paid research-assistant position under work experience is employment unless explicitly labeled an internship;
+a course/academic research project is project. Summer dates alone do not establish internship status.
+Each quote copies a contiguous exact block substring, including extraction spacing; use separate references for
+sentences spanning blocks. Availability is future availability, not dates of prior employment or study.
+Language entries copy exact original proficiency phrases verbatim. Use [] when the CV does not explicitly state
+language proficiency; medium of instruction, name, nationality and location do not establish language ability.
+Do not extract facts from HAT/context, which are processing rules/identifiers, never candidate evidence.''',
 'match': '''Return exactly one observation per confirmed criterion. Use supported/partial/unknown/contradiction
 faithfully. Only supported/partial links can appear in matches. Unknown-only items belong in observations
 and optionally concerns, never matches. Return 0..6 focused matches, kind=match, each with evidence and at
@@ -191,7 +199,7 @@ Unanchored goals have experienceId=null/evidence=[]; anchored goals use only tha
 STRUCTURED_EVIDENCE_RULE = """PRIVATE PROTOCOL criterion-rows-v3:
 Only criterion evidence rows are model-authored. Program derives display labels, IDs, priority order and interview
 selection. No global fact/component/point/focus inventory, no model capability labels or duplicate narrative.
-Source text appears once in document.blocks; sourceOwnership/experiences are navigation, not independent proof.
+Source text appears once in document.blocks; profileNavigation/sourceOwnership/experiences are navigation, not independent proof.
 Whole-criterion coverage is a semantic judgment, never the highest child state. Missing is unknown, explicit conflict
 needs its actual source. Supported OR alternatives do not require all alternatives. Every current review objection
 binds an exact row subject; cosmetic preferences and reminders about already-preserved unknowns are not blockers.
@@ -228,6 +236,57 @@ split independent objectives instead of bundling them.
 """
 for _role in ('match','review'):ROLE_INSTRUCTIONS[_role] += UNKNOWN_ROW_TASK_RULE
 
+# Explicit context state in the same row protocol; saved tasks remain unchanged.
+PREVIOUS_CONTEXT_ROW_TASKS = {role:ROLE_INSTRUCTIONS[role] for role in ('match','review')}
+CONTEXT_ROW_TASK_RULE = """
+Context retains related facts without supporting the requirement, raising coverage or becoming a positive match.
+Partial needs actual constituent support. Prior HR experience without an explicit HR link is context/omitted,
+never partial. Claims, quotes and owners must remain true in context too.
+Workflow construction/deployment and HR-system/data integration seek independent answers: split them into separate
+singleGoal items instead of bundling them. Keep each selected goal to one missing answer.
+Claims contain only source-backed candidate facts, not evaluative phrases such as 体现/满足 or inferred negatives.
+Keep the stated proficiency/achievement exactly in scope: a lower or unspecified level is not an explicit negation
+of a stronger level. Put missing details in unknowns, not unsupported claims of inability or absence.
+Partial means a genuinely supported constituent activity, not complete satisfaction of every word in a compound
+requirementQuote. Review the actual supported part and retain the remainder as unknown. Do not require multiple
+models, comparison experiments or complete optimality as a new threshold for partial unless the criterion explicitly
+requires that constituent evidence. Transferable activities may partially support future responsibilities; explicit
+prior-domain qualifications still need that domain's evidence. Context never substitutes for that evidence.
+Match the action AND its object, not shared words: evidence about testing one component is not automatically evidence
+about optimizing a different component. Date evidence keeps its temporal role: employment/course/project dates do not
+prove future availability or commitment. Use profileNavigation to locate the actual availability source, then verify
+and cite its original block. A stated future availability window does not prove weekly onsite days or an immediate start.
+When previousRows/repairIssues are supplied, correct those named defects and directly dependent coverage/unknowns only;
+preserve valid unrelated rows, candidate facts and exact sources rather than regenerating the analysis.
+"""
+CONTEXT_ROW_TASK_RULE += """
+Every evidence item separates claim (source fact) from scope (which constituent is supported and what remains
+unproven). Judge state and whole coverage against the explicitly limited scope, without silently treating partial
+as proof of the entire requirement. Scope must not invent any candidate fact. Same-dimension lower proficiency
+can support partial ability, while leaving the stronger proficiency unproven; never turn it into a negated fact.
+An explicitly declared future internship availability window can establish the declared duration preference;
+no signed contract or verbatim word 'commitment' is required. Weekly onsite days remain a separate unknown.
+Review all rows and selected goals in one pass. Block material wrong facts, sources, ownership, scope/coverage,
+omissions and invalid selected targets. Do not block merely because an unselected clarification could be phrased
+more precisely when the actual source level and remaining uncertainty are already honestly retained.
+"""
+CONTEXT_ROW_TASK_RULE += """
+Source quotes copy exact contiguous text, including internal word spacing from extraction. A sentence spanning blocks needs multiple blockId/quote references; never join blocks under one ID.
+Factual limits apply equally to claim AND scope: 'developed' does not establish deployment, live adoption or
+from-scratch implementation. Scope may explain transferable support, but may not add achieved actions, adoption,
+outcomes or negated proficiency absent from the source. A stated conversational level leaves fluency unproven;
+do not assert it definitively fails a fluency threshold. Preserve self-report, proposal, prototype and pilot qualifiers.
+Program selects the first eligible unknown from each highest-priority unresolved criterion before taking additional
+unknowns from the same criterion. This spreads three questions across distinct priority requirements while retaining
+all other unknowns. Shared source quotes should not become repeated headline facts through paraphrasing.
+"""
+for _role in ('match','review'):ROLE_INSTRUCTIONS[_role] += CONTEXT_ROW_TASK_RULE
+ROLE_INSTRUCTIONS['review'] += """
+Return checks for EVERY criterion with facts/scope/coverage/unknowns pass|block outcomes.
+Audit both claim and scope, including context. Each block needs a current concrete blocker finding for that criterion;
+warnings remain pass. Code rejects missing/duplicate rows. Return audit outcomes, not private reasoning.
+"""
+
 
 def row_template_migration(config):
     """Read-only migration proposal; applying it requires explicit CAS settings activation."""
@@ -236,7 +295,7 @@ def row_template_migration(config):
     result={'targetVersion':ROW_TEMPLATE_VERSION,'automaticMigration':False,'roles':{}}
     for role in ('match','review'):
         current=config['roles'][role]['systemPrompt'];target=ROLE_INSTRUCTIONS[role]
-        status='current' if current==target else 'known_previous_default' if current in (LEGACY_ROW_TASKS[role],PREVIOUS_ROW_TASKS[role]) else 'custom_requires_review'
+        status='current' if current==target else 'known_previous_default' if current in (LEGACY_ROW_TASKS[role],PREVIOUS_ROW_TASKS[role],PREVIOUS_CONTEXT_ROW_TASKS[role]) else 'custom_requires_review'
         result['roles'][role]={'status':status,'currentSha256':hashlib.sha256(current.encode()).hexdigest(),
             'targetSha256':hashlib.sha256(target.encode()).hexdigest(),
             'condition':'Root reviews this exact diff, preserves custom instructions explicitly, then CAS-saves and activates a new version. No automatic replacement.',

@@ -84,9 +84,11 @@ def validate_source_ownership(analysis,grounding,document,profile):
     texts={b['id']:b['text'] for b in document.get('blocks',[])}
     aliases={}
     for exp in profile.get('experiences',[]):
-        org=exp['organization'];tokens=re.findall(r'[A-Za-z0-9]+',org)
-        alias=' '.join(tokens[:3]) if len(tokens)>=3 else org
-        aliases[exp['id']]=(_owner_key(org),_owner_key(alias))
+        org=exp['organization']
+        # Use the printed name/stem and explicit parenthetical abbreviation, not an invented short prefix.
+        stem=re.sub(r'\s*\([^)]*\)\s*',' ',org).strip()
+        explicit=re.findall(r'\(([A-Za-z][A-Za-z0-9.-]{1,15})\)',org)
+        aliases[exp['id']]=tuple(_owner_key(name) for name in (org,stem,*explicit) if name)
     rows=[]
     for key in ('observations','concerns'):
         for item in analysis.get(key,[]):rows.append((item.get('id',item.get('criterionId')),item.get('explanation',''),item.get('evidence',[])))

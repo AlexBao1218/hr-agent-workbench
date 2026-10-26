@@ -32,7 +32,7 @@ def test_repair_changes_sdk_message_then_identical_next_input_stops_without_anot
     assert not any(e.get('role')=='interview' for e in events)
 
 
-from test_structured_evidence import row_case
+from test_structured_evidence import row_case,row_checks
 from hr_backend.structured_evidence import project_rows
 
 
@@ -42,7 +42,7 @@ def test_row_sdk_transport_has_compact_initial_input_and_three_role_public_resul
     _,_,targets,_,errors=project_rows(data,standards,profile);assert not errors
     questions=[{'id':'q'+str(i),'question':'你'+t['singleGoal'],'purpose':t['singleGoal'],
                 'pointIds':[t['pointId']],'criterionIds':[t['criterionId']],'evidence':t['evidence']} for i,t in enumerate(targets)]
-    outputs.extend([data,{'approved':True,'findings':[]},{'questions':questions}])
+    outputs.extend([data,{'approved':True,'findings':[],'checks':row_checks(data)},{'questions':questions}])
     result=Workflow(provider,max_repairs=0).analyze(doc,standards,hat,'r','c',profile=profile)
     assert result['reviewed'] and len(requests)==3
     first=json.loads(requests[0]['input'][1]['content'])

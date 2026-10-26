@@ -215,8 +215,9 @@ class StructuredReviewResult(Strict):
 # Private protocol v3: one row per confirmed criterion, no display/link inventory.
 class CriterionEvidence(Strict):
     requirementQuote: str = Field(min_length=1, description='Exact confirmed requirement substring this evidence addresses.')
-    state: Literal['supported','partial','contradiction']
+    state: Literal['supported','partial','contradiction','context'] = Field(description='context retains related source-backed facts only; it supports neither this subrequirement nor overall coverage. partial requires actual support of the quoted subrequirement.')
     claim: str = Field(min_length=1, max_length=180, description='One source-backed candidate fact, preserving employer and all material qualifications.')
+    scope: str = Field(default='', max_length=120, description='Explain which constituent this fact supports and what it leaves unproven. For context, say why it does not establish this requirement. This is a judgment, not a new candidate fact.')
     evidence: list[EvidenceRef] = Field(min_length=1)
 
 class CriterionUnknown(Strict):
@@ -244,9 +245,17 @@ class CriterionReviewFinding(Strict):
     severity: Literal['blocker','warning']
     message: str = Field(min_length=1)
 
+class CriterionRowCheck(Strict):
+    criterionId: str
+    facts: Literal['pass','block']
+    scope: Literal['pass','block']
+    coverage: Literal['pass','block']
+    unknowns: Literal['pass','block']
+
 class CriterionRowsReview(Strict):
     approved: bool
     findings: list[CriterionReviewFinding]
+    checks: list[CriterionRowCheck] = Field(default_factory=list, description='One explicit validation result for EVERY current criterion, Any block requires a concrete current blocker finding for that same criterion. These are audit outcomes, not private reasoning.')
 
 class InterviewQuestion(Strict):
     id: str

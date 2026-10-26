@@ -122,4 +122,4 @@ def cv_settings_hash(snapshot):
     import json
     role=deepcopy(snapshot['roles']['cv'])
     role['model']=role.get('model') or snapshot['runtime']['model']
-    return hashlib.sha256(json.dumps({'prompt':snapshot['effectivePrompts']['cv'],'settings':role},sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps({'inputProtocol':'cv-source-only-v2','prompt':snapshot['effectivePrompts']['cv'],'settings':role},sort_keys=True).encode()).hexdigest()

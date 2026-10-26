@@ -376,7 +376,7 @@ def test_semantic_feedback_survives_a_deterministic_repair_failure(case,final_ap
 
 # Criterion rows v3. Fixtures below are explicit offline judgments, not model results.
 from hr_backend.schemas import CriterionRowsResult, CriterionRowsReview
-from hr_backend.structured_evidence import row_payload, validate_rows, project_rows, validate_row_review
+from hr_backend.structured_evidence import row_payload, validate_rows, project_rows, validate_row_review, row_claim_grounding
 from hr_backend.prompts import ROW_TEMPLATE_VERSION, LEGACY_ROW_TASKS, row_template_migration
 
 
@@ -402,11 +402,20 @@ def row_case(case):
     return doc,standards,hat,profile,CriterionRowsResult.model_validate({'rows':rows}).model_dump()
 
 
+def row_checks(data,findings=()):
+    blocked={f['criterionId'] for f in findings if f['severity']=='blocker'}
+    return [{'criterionId':r['criterionId'],'facts':'block' if r['criterionId'] in blocked else 'pass',
+             'scope':'pass','coverage':'pass','unknowns':'pass'} for r in data['rows']]
+
+
 class RowStub(StructuredStub):
     evidence_protocol=3
     def generate(self,role,payload,schema):
         if role=='match':assert schema is CriterionRowsResult
-        if role=='review':assert schema is CriterionRowsReview
+        if role=='review':
+            assert schema is CriterionRowsReview
+            result=super().generate(role,payload,schema)
+            return {**result,'checks':row_checks(payload['criterionEvidence'],result['findings'])}
         return super().generate(role,payload,schema)
 
 
@@ -518,7 +527,7 @@ def test_row_review_current_subjects_and_retained_unknowns(row_case):
             if role=='review':
                 self.roles.append(role)
                 assert len(payload['criterionEvidence']['rows'])==3
-                return review
+                return {**review,'checks':row_checks(payload['criterionEvidence'],review['findings'])}
             return super().generate(role,payload,schema)
     provider=Reject(data)
     with pytest.raises(WorkflowError,match='Evidence review did not pass'):
@@ -633,11 +642,12 @@ def test_unknown_row_keeps_sourced_facts_without_positive_points_or_score(row_ca
     assert provider.roles==['match','review','interview']
 
 
-def test_false_hr_support_still_fails_independent_review_after_unknown_gate_relaxed(row_case):
+@pytest.mark.parametrize('item_state,coverage',[('partial','partial'),('context','unknown')])
+def test_false_hr_support_still_fails_independent_review_after_unknown_gate_relaxed(row_case,item_state,coverage):
     doc,standards,hat,profile,data=deepcopy(row_case)
     # A literal source quote exists, but the candidate claim/domain assertion is false.
-    prior=data['rows'][-1];prior['coverage']='partial'
-    prior['evidence']=[{'requirementQuote':'构建HR助手的实操经验','state':'partial',
+    prior=data['rows'][-1];prior['coverage']=coverage
+    prior['evidence']=[{'requirementQuote':'构建HR助手的实操经验','state':item_state,
         'claim':'构建了HR助手。','evidence':[{'blockId':'b1','quote':'Built a workflow prototype for inventory.'}]}]
     review={'approved':False,'findings':[{'criterionId':'prior','section':'evidence','index':0,
         'statement':prior['evidence'][0]['claim'],'requirementQuote':'构建HR助手的实操经验',
@@ -645,7 +655,7 @@ def test_false_hr_support_still_fails_independent_review_after_unknown_gate_rela
         'message':'库存流程原型不证明HR助手经历，不能用于该既有HR资格的partial支持。'}]}
     class RejectHR(RowStub):
         def generate(self,role,payload,schema):
-            if role=='review':self.roles.append(role);return review
+            if role=='review':self.roles.append(role);return {**review,'checks':row_checks(payload['criterionEvidence'],review['findings'])}
             return super().generate(role,payload,schema)
     provider=RejectHR(data);events=[]
     with pytest.raises(WorkflowError,match='Evidence review did not pass'):
@@ -662,8 +672,188 @@ def test_unknown_default_task_revision_is_explicit_and_does_not_mutate_saved_tas
     assert config==original and proposal['automaticMigration'] is False
     for role in ('match','review'):
         assert proposal['roles'][role]['status']=='known_previous_default'
-        assert ROLE_INSTRUCTIONS[role]==PREVIOUS_ROW_TASKS[role]+UNKNOWN_ROW_TASK_RULE
+        assert ROLE_INSTRUCTIONS[role].startswith(PREVIOUS_ROW_TASKS[role]+UNKNOWN_ROW_TASK_RULE)
         assert 'never 非HR' in ROLE_INSTRUCTIONS[role]
         assert 'does not mean the whole' in ROLE_INSTRUCTIONS[role]
     config['roles']['match']['systemPrompt']+=' Custom user rule'
     assert row_template_migration(config)['roles']['match']['status']=='custom_requires_review'
+
+
+def test_context_does_not_score_match_or_own_a_fact_needed_by_later_criterion(row_case):
+    from hr_backend.policy import rank
+    changed=deepcopy(row_case);data=changed[4]
+    row=data['rows'][0];row['coverage']='unknown';row['evidence'][0]['state']='context'
+    same=deepcopy(row['evidence'][0]);same.update(requirementQuote='测试检索效果',state='partial')
+    data['rows'][1]['evidence'].insert(0,same)
+    CriterionRowsResult.model_validate(data)
+    baseline=[{'criterionId':r['criterionId'],'coverage':r['coverage']} for r in data['rows']]
+    analysis,grounding,_,_=row_render(changed)
+    unknown=next(o for o in analysis['observations'] if o['criterionId']=='duty')
+    assert unknown['coverage']=='unknown' and '不支持该标准片段' in unknown['explanation']
+    assert unknown['evidence']==row['evidence'][0]['evidence']
+    assert not any('duty' in p['criterionIds'] for p in analysis['matches'])
+    assert row['evidence'][0]['claim'].rstrip('。') in analysis['matches'][0]['explanation']
+    assert analysis['matches'][0]['criterionIds']==['improve']
+    assert rank(changed[1]['criteria'],baseline)==rank(changed[1]['criteria'],analysis['observations'])
+    assert grounding[0]['claims'][0]['claim']==row['evidence'][0]['claim']
+
+
+@pytest.mark.parametrize('coverage',['supported','partial','contradiction'])
+def test_context_alone_cannot_establish_positive_or_conflicting_coverage(row_case,coverage):
+    doc,standards,hat,profile,data=deepcopy(row_case)
+    row=data['rows'][0];row['coverage']=coverage;row['evidence'][0]['state']='context'
+    _,_,_,_,errors=project_rows(data,standards,profile)
+    assert any('requires' in error for error in errors)
+
+
+def test_positive_row_keeps_context_in_observation_without_narrating_it_as_support(row_case):
+    changed=deepcopy(row_case);data=changed[4]
+    context=deepcopy(data['rows'][1]['evidence'][0]);context.update(requirementQuote='梳理业务流程',state='context')
+    data['rows'][0]['evidence'].append(context)
+    analysis,grounding,_,_=row_render(changed)
+    assert context['claim'] in analysis['observations'][0]['explanation']
+    assert '仅作相关背景，不支持' in analysis['observations'][0]['explanation']
+    assert context['claim'] not in analysis['matches'][0]['explanation']
+    assert grounding[0]['claims']==[{'claim':data['rows'][0]['evidence'][0]['claim'],'evidence':data['rows'][0]['evidence'][0]['evidence']}]
+
+
+def test_context_template_migration_requires_exact_default_and_split_goal_guidance():
+    from hr_backend.prompts import PREVIOUS_CONTEXT_ROW_TASKS,CONTEXT_ROW_TASK_RULE,ROLE_INSTRUCTIONS
+    config={'roles':{r:{'systemPrompt':task} for r,task in PREVIOUS_CONTEXT_ROW_TASKS.items()}}
+    original=deepcopy(config);proposal=row_template_migration(config)
+    assert config==original
+    for role in ('match','review'):
+        assert proposal['roles'][role]['status']=='known_previous_default'
+        assert ROLE_INSTRUCTIONS[role].startswith(PREVIOUS_CONTEXT_ROW_TASKS[role]+CONTEXT_ROW_TASK_RULE)
+        assert 'split them into separate' in ROLE_INSTRUCTIONS[role]
+        assert 'never partial' in ROLE_INSTRUCTIONS[role]
+    config['roles']['review']['systemPrompt']+=' custom edits'
+    assert row_template_migration(config)['roles']['review']['status']=='custom_requires_review'
+
+
+def test_compact_profile_navigation_preserves_availability_role_and_original_sources(row_case):
+    doc,standards,hat,profile,data=deepcopy(row_case)
+    doc['blocks'] += [{'id':'available-label','text':'Available Period:'},
+                      {'id':'available-value','text':'1 Jan 2027 – 1 Sep 2027'},
+                      {'id':'job-dates','text':'Internship Jun 2026 – Dec 2026'}]
+    profile['availability']='1 Jan 2027 – 1 Sep 2027'
+    packet=row_payload(doc,standards,hat,{},[],profile)
+    nav=packet['profileNavigation']['availability']
+    assert nav=={'value':profile['availability'],'sourceBlockIds':['available-value']}
+    assert 'quote' not in nav and 'job-dates' not in nav['sourceBlockIds']
+    assert packet['document']['blocks'][-3:]==doc['blocks'][-3:]
+    assert not any(k.startswith('previous') or k.startswith('repair') for k in packet)
+
+
+def test_row_support_scope_is_preserved_beside_exact_fact_and_review_payload(row_case):
+    changed=deepcopy(row_case)
+    item=changed[4]['rows'][0]['evidence'][0]
+    item['scope']='支持流程原型构建；HR系统集成仍待确认。'
+    analysis,grounding,targets,selected,errors=project_rows(changed[4],changed[1],changed[3])
+    assert not errors
+    assert item['scope'] in analysis['observations'][0]['explanation']
+    assert item['scope'] in grounding[0]['assessment']
+    assert grounding[0]['claims'][0]['claim']==item['claim']
+    assert row_claim_grounding(changed[4])[0]['claims'][0]['scope']==item['scope']
+
+
+def test_context_scope_cannot_raise_coverage_or_become_a_positive_point(row_case):
+    changed=deepcopy(row_case)
+    row=changed[4]['rows'][0];row['coverage']='unknown'
+    for fact in row['evidence']:
+        fact.update(state='context',scope='仅为相关流程背景，未证明HR系统集成。')
+    analysis,grounding,targets,selected,errors=project_rows(changed[4],changed[1],changed[3])
+    assert not errors
+    assert analysis['observations'][0]['coverage']=='unknown'
+    assert not any(row['criterionId'] in p['criterionIds'] for p in analysis['matches'])
+
+
+def test_quote_repairs_identify_exact_location_and_preserve_extraction_spacing():
+    doc={'blocks':[{'id':'b1','text':'Profic ient in Python'},{'id':'b2','text':'stations'}]}
+    value={'rows':[{'evidence':[{'blockId':'b1','quote':'Proficient in Python'}]}]}
+    issues=validate_refs(value,doc,detailed=True)
+    assert len(issues)==1 and '.rows.0.evidence.0' in issues[0]
+    assert 'Profic ient in Python' in issues[0]
+    assert validate_refs(value,doc)==['Invalid source reference or quote']
+    value['rows'][0]['evidence'][0]['quote']='Profic ient in Python'
+    assert not validate_refs(value,doc,detailed=True)
+
+
+def test_interview_selection_spreads_priority_criteria_before_same_row_remainders(row_case):
+    changed=deepcopy(row_case);data=changed[4]
+    gap=deepcopy(data['rows'][0]['unknowns'][0]);gap['singleGoal']='是否有另外一个独立尚未确定的流程经历？'
+    data['rows'][0]['unknowns'].insert(0,gap)
+    analysis,grounding,targets,selected,errors=project_rows(data,changed[1],changed[3])
+    assert not errors
+    assert [t['criterionId'] for t in targets]==[r['criterionId'] for r in data['rows']]
+    assert len(data['rows'][0]['unknowns'])==2
+
+
+def test_printed_company_abbreviation_avoids_false_cross_employer_rejection():
+    from hr_backend.evidence import validate_source_ownership
+    doc={'blocks':[{'id':'h1','text':'MTR Corporation Limited'},{'id':'a1','text':'Led a campaign.'},
+        {'id':'h2','text':'The Hongkong and Shanghai Banking Corporation Limited (HSBC)'},{'id':'a2','text':'Managed 13-market communications.'}]}
+    exps=[{'id':'mtr','organization':'MTR Corporation Limited','kind':'internship','evidence':[{'blockId':'h1','quote':'MTR Corporation Limited'},{'blockId':'a1','quote':'Led a campaign.'}]},
+          {'id':'hsbc','organization':'The Hongkong and Shanghai Banking Corporation Limited (HSBC)','kind':'internship','evidence':[{'blockId':'h2','quote':doc['blocks'][2]['text']},{'blockId':'a2','quote':doc['blocks'][3]['text']}]}]
+    refs=[{'blockId':'a1','quote':'Led a campaign.'},{'blockId':'a2','quote':'Managed 13-market communications.'}]
+    analysis={'observations':[{'criterionId':'c1','explanation':'在MTR Corporation Limited领导活动。在HSBC管理13市场沟通。','evidence':refs}]}
+    assert not validate_source_ownership(analysis,[],doc,{'experiences':exps})
+    analysis['observations'][0]['explanation']='在MTR Corporation Limited管理13市场沟通。'
+    assert validate_source_ownership(analysis,[],doc,{'experiences':exps})
+
+
+def test_source_only_cv_rejects_language_imported_from_job_requirements(row_case):
+    changed=deepcopy(row_case);changed[3]['languages']=['Mandarin Chinese']
+    provider=RowStub(changed[4])
+    with pytest.raises(WorkflowError,match='unsupported history or invalid citations'):
+        Workflow(provider,max_repairs=0).analyze(*changed[:3],'r','c',profile=changed[3])
+    assert provider.roles==[]
+
+
+def test_noncontiguous_requirement_error_identifies_the_item_and_original(row_case):
+    changed=deepcopy(row_case);item=changed[4]['rows'][0]['unknowns'][0]
+    item['requirementQuote']='An invented reconstructed predicate'
+    errors=validate_rows(changed[4],changed[1],changed[3])
+    issue=next(e for e in errors if 'Row item must quote' in e)
+    assert '/unknowns/0' in issue and item['requirementQuote'] in issue
+    assert changed[1]['criteria'][0]['jdQuote'] in issue
+
+
+@pytest.mark.parametrize('defect',['empty','duplicate','unexplained_block','approved_block'])
+def test_complete_review_audit_is_required_without_accepting_blanket_approval(row_case,defect):
+    data=row_case[4];review={'approved':True,'findings':[],'checks':row_checks(data)}
+    assert not validate_row_review(review,data,row_case[1],require_checks=True)
+    if defect=='empty':review['checks']=[]
+    elif defect=='duplicate':review['checks'].append(deepcopy(review['checks'][0]))
+    else:
+        review['checks'][0]['scope']='block'
+        if defect=='approved_block':
+            row=data['rows'][0]
+            review['findings']=[{'criterionId':row['criterionId'],'section':'coverage','index':None,
+                'statement':row['coverage'],'requirementQuote':row['evidence'][0]['requirementQuote'],
+                'evidence':[],'severity':'blocker','message':'Offline scope sentinel.'}]
+    assert validate_row_review(review,data,row_case[1],require_checks=True)
+
+
+@pytest.mark.parametrize('wrong_owner',[False,True])
+def test_row_claim_ownership_is_checked_before_deriving_multi_employer_prose(row_case,wrong_owner):
+    doc,standards,hat,profile,data=deepcopy(row_case)
+    blocks={b['id']:b for b in doc['blocks']}
+    doc['blocks']=[{'id':'ha','text':'Alpha Company (AC)'},blocks['b1'],
+                   {'id':'hb','text':'BetaBrand Co., Limited'},blocks['b2'],blocks['b3']]
+    profile['experiences']=[{'id':eid,'organization':org,'role':'Intern','kind':'internship',
+        'start':None,'end':None,'summary':'','companyGroup':None,'evidence':[{'blockId':bid,'quote':text}]}
+        for eid,org,bid,text in [('a','Alpha Company (AC)','ha','Alpha Company (AC)'),('b','BetaBrand Co., Limited','hb','BetaBrand Co., Limited')]]
+    data['rows'][0]['evidence'][0]['claim']='AC构建了流程原型。'
+    second=deepcopy(data['rows'][1]['evidence'][0]);second['claim']='BetaBrand调优并测试检索。'
+    second['requirementQuote']=data['rows'][0]['evidence'][0]['requirementQuote']
+    data['rows'][0]['evidence'].append(second)
+    if wrong_owner:data['rows'][0]['evidence'][1]['claim']='AC调优并测试检索。'
+    provider=RowStub(data)
+    if wrong_owner:
+        with pytest.raises(WorkflowError,match='Deterministic validation'):
+            Workflow(provider,max_repairs=0).analyze(doc,standards,hat,'r','c',profile=profile)
+        assert provider.roles==['match']
+    else:
+        result=Workflow(provider,max_repairs=0).analyze(doc,standards,hat,'r','c',profile=profile)
+        assert result['reviewed'] and provider.roles==['match','review','interview']
