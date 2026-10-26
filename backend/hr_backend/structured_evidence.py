@@ -6,6 +6,7 @@ identities, references and projection boundaries. Legacy saved data is untouched
 """
 from copy import deepcopy
 import hashlib
+import json
 
 from .evidence import normalize_evidence, reading_order
 
@@ -19,6 +20,21 @@ def _refs(refs):
     for ref in refs:
         key=(ref['blockId'],normalize_evidence(ref['quote']))
         if key not in seen:result.append(deepcopy(ref));seen.add(key)
+    return result
+
+
+def active_structure(data):
+    """Project the referenced subgraph; raw model inventory remains in role_output.
+
+    Inventory selection is not an evidence correction. A fact used by a point is
+    retained even if its component association is broken, so that error must be
+    repaired explicitly rather than silently guessed or discarded.
+    """
+    result=deepcopy(data)
+    focus_ids={c['focusId'] for c in data['concerns']}|{t['focusId'] for t in data['verificationTargets']}
+    fact_ids={i for c in data['components'] for i in c['factIds']}|{i for p in data['matches'] for i in p['factIds']}
+    result['facts']=[f for f in result['facts'] if f['id'] in fact_ids]
+    result['focuses']=[f for f in result['focuses'] if f['id'] in focus_ids]
     return result
 
 
@@ -40,6 +56,7 @@ def focus_goal(focus,component):
 
 
 def validate_structure(data,standards,profile):
+    data=active_structure(data)
     errors=[]
     for key in ('facts','components','matches','focuses','concerns','verificationTargets'):
         if not _unique(data[key]):errors.append(f'{key} IDs must be unique')
@@ -65,8 +82,6 @@ def validate_structure(data,standards,profile):
             errors.append('Component references missing/duplicate facts: '+c['id'])
         if c['coverage']!='unknown' and not c['factIds']:
             errors.append('Positive/partial/contradiction components require canonical facts: '+c['id'])
-    if {i for c in components.values() for i in c['factIds']}!=facts.keys():
-        errors.append('Every canonical fact must be linked to a component; do not generate stray narrative')
     seen=[o['criterionId'] for o in data['observations']]
     if set(seen)!=criteria.keys() or len(seen)!=len(set(seen)):
         errors.append('Observations must cover each confirmed criterion exactly once')
@@ -87,6 +102,11 @@ def validate_structure(data,standards,profile):
     if used_components!=components.keys():errors.append('Every component must remain in its observation, including unselected unknowns')
     owners={}
     for point in data['matches']:
+        # Same existing grounding rule, checked before projection so a broken
+        # reference does not conceal an independent metadata error until M2.
+        if (point['focus']=='capability' and not point['capabilities']) or (point['focus']!='capability' and point['capabilities']):
+            errors.append('Point focus/capabilities mismatch: '+json.dumps({k:point[k] for k in ('id','focus','capabilities')},ensure_ascii=False)
+                +'. capability requires one controlled capability; workflow/other/uncertain require an empty list. Correct the explicit metadata from the actual point scope; do not guess from title keywords.')
         refs=point['componentIds'];point_components=[components[i] for i in refs if i in components]
         positive={c['criterionId'] for c in point_components if c['coverage'] in ('supported','partial')}
         if len(refs)!=len(set(refs)) or len(point_components)!=len(refs) or not positive:
@@ -97,7 +117,13 @@ def validate_structure(data,standards,profile):
             errors.append('Match references missing/duplicate facts: '+point['id'])
         supported_facts={i for c in point_components if c['coverage'] in ('supported','partial') for i in c['factIds']}
         if not set(point['factIds'])<=supported_facts:
-            errors.append('Match fact needs a link through its own component: '+point['id'])
+            location={'pointId':point['id'],'factIds':sorted(set(point['factIds'])-supported_facts),
+                'componentIds':refs,'positiveComponents':[{'id':c['id'],'criterionId':c['criterionId'],
+                    'factIds':c['factIds']} for c in point_components if c['coverage'] in ('supported','partial')]}
+            errors.append('Match fact needs a link through its own positive component: '+json.dumps(location,ensure_ascii=False)
+                +'. Explicitly correct the fact/component association only if the source supports that requirement component; '
+                'otherwise keep relevant source context as supplementaryEvidence instead of narrating unsupported positive support. '
+                'Do not guess a criterion, add an unrelated component, or change coverage merely to pass.')
         for i in point['factIds']:
             if i in owners:errors.append('A headline fact has more than one match owner: '+i)
             owners[i]=point['id']
@@ -122,8 +148,6 @@ def validate_structure(data,standards,profile):
     selected=[t['focusId'] for t in data['verificationTargets']]
     if len(selected)!=3 or len(set(selected))!=3 or not set(selected)<=focuses.keys():
         errors.append('Select exactly three distinct existing focuses')
-    used_focus=set(concern_focus+selected)
-    if used_focus!=focuses.keys():errors.append('Do not create unused verification focuses')
     # A target must link a projected concern, or a relevant supported match.
     for i in selected:
         if i not in focuses:continue
@@ -135,6 +159,7 @@ def validate_structure(data,standards,profile):
 
 
 def project_match(data,standards,profile):
+    data=active_structure(data)
     errors=validate_structure(data,standards,profile)
     empty={'observations':[],'matches':[],'concerns':[],'summary':'','keyUnknown':None}
     if errors:return empty,[],[],errors
@@ -181,6 +206,7 @@ def project_match(data,standards,profile):
 
 def review_projection(data,analysis):
     """No separately rewritten body is supplied as another source of facts."""
+    data=active_structure(data)
     facts={f['id']:f for f in data['facts']}
     supplementary=[]
     for p in analysis['matches']:
@@ -201,6 +227,7 @@ def review_projection(data,analysis):
 
 def validate_review(review,data,analysis,standards):
     """Validate findings against actual current objects; invalid reviews fail closed."""
+    data=active_structure(data)
     criteria={c['id']:c for c in standards['criteria']}
     components={c['id']:c for c in data['components']}
     _,supplementary=review_projection(data,analysis)

@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from hr_backend.evidence import compose_point_explanations
 from hr_backend.schemas import StructuredMatchResult
-from hr_backend.structured_evidence import project_match, review_projection, validate_review
+from hr_backend.structured_evidence import active_structure, project_match, review_projection, validate_review
 from hr_backend.workflow import Workflow, WorkflowError, validate_refs
 
 
@@ -199,6 +199,62 @@ def test_graph_uses_structured_review_and_keeps_public_shapes(case):
     assert all(set(p)=={'id','title','criterionIds','jdRequirement','explanation','evidence','kind'} for p in result['matches']+result['concerns'])
     assert all(len(c['criterionIds'])==1 for c in result['concerns'])
     assert not any(k in result for k in ('facts','components','focuses','structuredEvidence'))
+
+
+def test_unused_inventory_does_not_block_or_leak_into_public_or_review_projection(case):
+    document,standards,hat,profile,data=deepcopy(case)
+    data['facts'].append({'id':'unused-fact','claim':'Unused intermediate stock.',
+                         'evidence':[{'blockId':'unused-outside','quote':'Not a used source'}]})
+    data['focuses'].append({'id':'unused-focus','componentId':'unused-component','label':'Unused plan',
+        'objective':'existence','experienceId':None,'evidence':[]})
+    original=deepcopy(data);provider=StructuredStub(data);events=[]
+    result=Workflow(provider,max_repairs=0).analyze(document,standards,hat,'run','candidate',profile=profile,trace_callback=events.append)
+    assert result['reviewed']
+    projection=provider.review_payloads[0]['evidenceReview']
+    assert all(f['id']!='unused-fact' for f in projection['facts'])
+    assert all(f['id']!='unused-focus' for f in projection['focuses'])
+    assert data==original
+    artifacts=[e['_diagnostic'] for e in events if '_diagnostic' in e]
+    raw=next(a['output'] for a in artifacts if a['kind']=='role_output' and a['schema']=='StructuredMatchResult')
+    assert raw==original  # No fabricated source or in-place alteration of the model output.
+    validated=next(a for a in artifacts if a['kind']=='match_validation')
+    assert validated['inventoryCounts']=={'factsRaw':3,'factsActive':2,'focusesRaw':4,'focusesActive':3}
+    assert not validated['projectionBlocked']
+    used=deepcopy(data);used['components'][-1]['factIds']=['unused-fact']
+    assert any(r['id']=='unused-fact' for r in active_structure(used)['facts'])
+    provider=StructuredStub(used)
+    with pytest.raises(WorkflowError,match='Deterministic validation did not pass'):
+        Workflow(provider,max_repairs=0).analyze(document,standards,hat,'used-run','candidate',profile=profile)
+    assert provider.roles==['match']  # Exact source checks still block actually used invalid inventory.
+
+
+def test_bad_point_association_is_specific_and_does_not_report_empty_placeholder_errors(case):
+    document,standards,hat,profile,data=deepcopy(case)
+    data['facts'].append({'id':'fact-research','claim':'研究了优化方法。',
+        'evidence':[{'blockId':'b3','quote':'Researched an optimization method.'}]})
+    data['matches'][0]['factIds'].append('fact-research')
+    events=[];provider=StructuredStub(data)
+    with pytest.raises(WorkflowError,match='Deterministic validation did not pass'):
+        Workflow(provider,max_repairs=0).analyze(document,standards,hat,'run','candidate',profile=profile,trace_callback=events.append)
+    diagnostic=next(e['_diagnostic'] for e in events if e.get('_diagnostic',{}).get('kind')=='match_validation')
+    assert diagnostic['projectionBlocked'] and len(diagnostic['validationIssues'])==1
+    issue=diagnostic['validationIssues'][0]
+    assert '"pointId": "m1"' in issue and '"factIds": ["fact-research"]' in issue
+    assert '"componentIds": ["flow", "hr"]' in issue and '"positiveComponents"' in issue
+    assert 'Observations must cover' not in issue and 'three reviewed single-purpose' not in issue
+    assert data['components'][0]['factIds']==['f1']  # No automatic association guessing.
+
+
+def test_preexisting_scope_metadata_error_is_visible_in_the_same_structural_pass(case):
+    document,standards,hat,profile,data=deepcopy(case)
+    data['matches'][1]['focus']='capability'  # Existing rule requires one controlled capability.
+    data['facts'].append({'id':'research','claim':'研究了优化方法。',
+        'evidence':[{'blockId':'b3','quote':'Researched an optimization method.'}]})
+    data['matches'][0]['factIds'].append('research')
+    errors=project_match(data,standards,profile)[-1]
+    assert len(errors)==2
+    assert any('"pointId": "m1"' in e for e in errors)
+    assert any('"id": "m2"' in e and 'focus/capabilities mismatch' in e for e in errors)
 
 
 def test_real_api_store_with_structured_stub_persists_public_result_and_restart_readback(case,tmp_path):

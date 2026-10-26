@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import unicodedata
 import os
 import json
+import hashlib
 from typing import TypedDict, Any
 from uuid import uuid4
 from pydantic import ValidationError
@@ -14,7 +15,7 @@ from .evidence import source_ownership_context, validate_source_ownership, readi
 from .schemas import (JDResult, CandidateProfile, MatchResult, ReviewResult,
                       StructuredMatchResult, StructuredReviewResult,
                       InterviewResult, ChatResult, StandardsChatResult)
-from .structured_evidence import project_match, review_projection, validate_review as validate_structured_review, repair_findings
+from .structured_evidence import active_structure, project_match, review_projection, validate_review as validate_structured_review, repair_findings
 
 class WorkflowError(RuntimeError):
     def __init__(self, code, message):
@@ -120,6 +121,8 @@ class State(TypedDict, total=False):
     verificationTargets: list
     structuredEvidence: dict
     semanticErrors: list
+    matchInputHash: str
+    matchInputAttempt: int
 
 class Workflow:
     def __init__(self, provider, max_repairs=None):
@@ -258,34 +261,44 @@ class Workflow:
                 for field in ('previousPointGrounding','previousVerificationTargets','previousAnalysis'):current.pop(field)
                 current['previousStructuredEvidence']=state.get('structuredEvidence')
                 current['repairScope']['instruction']='Correct the supplied defects in the private fact/component/focus graph and dependent references. Preserve unrelated facts, exact sources and IDs. Keep every component in its observation; derive point wording and target links through the same objects. Do not add a separate assessment/narrative or invent evidence.'
-            grounding=[];targets=[];structured={}
+            input_hash=hashlib.sha256(json.dumps(current,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest() if self.structured_evidence else ''
+            if self.structured_evidence and state.get('matchInputHash')==input_hash:
+                self._event(trace_callback,context,'match','failed',attempt,'Stopped unchanged repair request; no provider call')
+                self._diagnostic(trace_callback,context,'match',attempt,{'kind':'repair_stalled','inputHash':input_hash,
+                    'previousAttempt':state.get('matchInputAttempt'),'repairIssues':repair_errors,'providerCalled':False})
+                raise WorkflowError('repair_stalled','Matching repair input did not change; stopped without repeating the same model request. Inspect the last matching diagnostics.')
+            grounding=[];targets=[];structured={};inventory_counts={};structure_errors=[]
             try:
                 result=self._call('match',current,StructuredMatchResult if self.structured_evidence else MatchResult,trace_callback,attempt,defer_success=True)
                 if self.structured_evidence:
-                    structured=result
+                    structured=active_structure(result)
+                    inventory_counts={'factsRaw':len(result['facts']),'factsActive':len(structured['facts']),
+                        'focusesRaw':len(result['focuses']),'focusesActive':len(structured['focuses'])}
                     result,grounding,targets,structure_errors=project_match(structured,standards,state['profile'])
                 else:
                     structure_errors=[]
                     grounding=result.pop('pointGrounding')
                     targets=result.pop('verificationTargets')
-                result=compose_point_explanations(result,grounding)
-                result=canonical_requirements(result,standards)
-                result,additions=supplement_capability_sources(result,index,exclusions=state.get('sourceExclusions',[]),grounding=grounding)
-                if additions:self._diagnostic(trace_callback,context,'match',attempt,{'kind':'source_coverage','additions':additions})
-                result=reading_order(result,standards)
-                targets,rebindings=rebind_repaired_verification_targets(targets,result,state.get('analysis'),standards)
-                if rebindings:self._diagnostic(trace_callback,context,'match',attempt,{'kind':'verification_target_rebinding','changes':rebindings})
-                errors=structure_errors+validate_analysis(result,document,standards)
+                errors=list(structure_errors)
                 if structured:
                     errors+=validate_refs(structured,document)
                     errors+=validate_source_ownership({'observations':[],'concerns':[]},
                         [{'pointId':f['id'],'claims':[f]} for f in structured['facts']],document,state['profile'])
-                errors+=validate_verification_targets(targets,result,standards,state['profile'])+validate_refs(targets,document)
-                errors+=validate_point_grounding(result,grounding,require_facts=self.provider.mode=='live')+validate_refs(grounding,document)
-                errors+=validate_source_ownership(result,grounding,document,state['profile'])
-                errors+=validate_capability_coverage(result,index,exclusions=state.get('sourceExclusions',[]),grounding=grounding)
-                result['summary']=identity_free_summary(result,standards)
-                if self.provider.mode=='live': errors+=validate_presentation(result)
+                if not structure_errors:
+                    result=compose_point_explanations(result,grounding)
+                    result=canonical_requirements(result,standards)
+                    result,additions=supplement_capability_sources(result,index,exclusions=state.get('sourceExclusions',[]),grounding=grounding)
+                    if additions:self._diagnostic(trace_callback,context,'match',attempt,{'kind':'source_coverage','additions':additions})
+                    result=reading_order(result,standards)
+                    targets,rebindings=rebind_repaired_verification_targets(targets,result,state.get('analysis'),standards)
+                    if rebindings:self._diagnostic(trace_callback,context,'match',attempt,{'kind':'verification_target_rebinding','changes':rebindings})
+                    errors+=validate_analysis(result,document,standards)
+                    errors+=validate_verification_targets(targets,result,standards,state['profile'])+validate_refs(targets,document)
+                    errors+=validate_point_grounding(result,grounding,require_facts=self.provider.mode=='live')+validate_refs(grounding,document)
+                    errors+=validate_source_ownership(result,grounding,document,state['profile'])
+                    errors+=validate_capability_coverage(result,index,exclusions=state.get('sourceExclusions',[]),grounding=grounding)
+                    result['summary']=identity_free_summary(result,standards)
+                    if self.provider.mode=='live': errors+=validate_presentation(result)
             except ProviderError as exc:
                 # Only completed but malformed structured output is repairable.
                 # Truncation/refusal/transport/input-budget failures terminate this run.
@@ -297,9 +310,10 @@ class Workflow:
                 errors=[exc.message]
             self._event(trace_callback,context,'match','failed' if errors else 'succeeded',attempt,'Deterministic match validation failed' if errors else 'Match structure and evidence validated')
             self._diagnostic(trace_callback,context,'match',attempt,{'kind':'match_validation','analysis':result,'pointGrounding':grounding,'verificationTargets':targets,'validationIssues':errors,
-                **({'evidenceProtocol':2,'structuredEvidence':structured} if self.structured_evidence else {})})
+                **({'evidenceProtocol':2,'structuredEvidence':structured,'inventoryCounts':inventory_counts,
+                    'projectionBlocked':bool(structure_errors) if structured else True} if self.structured_evidence else {})})
             return {'analysis':result,'pointGrounding':grounding,'verificationTargets':targets,'errors':errors,'attempt':attempt,'approved':False,
-                    'structuredEvidence':structured or state.get('structuredEvidence',{})}
+                    'structuredEvidence':structured or state.get('structuredEvidence',{}),'matchInputHash':input_hash,'matchInputAttempt':attempt}
 
         def review_node(state):
             if state['errors']:
