@@ -94,6 +94,7 @@ export function CandidateRunProgress({ candidate, run, placement = 'card' }: { c
   const stopped = nodes.some(node => node.status === 'stopped') || (steps.length > 0 && run?.status === 'cancelled');
   const label = failed || error ? '分析未完成 · 查看进度' : complete ? '分析已完成' : stopped ? '分析已停止 · 查看进度' : running ? `${running.role === 'jd' ? '岗位标准' : labels[running.role]}中` : stepsComplete ? '结果确认中 · 查看进度' : '等待开始 · 查看进度';
   useEffect(() => { setOpen(false); }, [run?.id, complete]);
+  if (placement === 'card' && candidate.stage === 'ready' && candidate.assessmentStatus === 'current') return null;
   if (!steps.length && !processing && !candidateFailed) return null;
   const close = () => { setOpen(false); trigger.current?.focus(); };
   return <div className={`candidate-progress progress-${placement}`} data-candidate-id={candidate.id} onClick={event => event.stopPropagation()} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape' && open) { event.preventDefault(); close(); } }}>

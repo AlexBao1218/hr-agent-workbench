@@ -174,7 +174,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         if current and a.get('policyVersion')==POLICY_VERSION:result['gradeReason']=grade_reason(s['standards']['criteria'],a['observations'],a['reviewed'])[1]
         result['hrReview']=copy.deepcopy(c.get('hrReview') or {'decision':None,'note':'','updatedAt':None})
         if c.get('_deletePending'):
-            result.update(deletionPending=True,stage='needs_attention',grade='pending',error='删除未完成，请点击右上角垃圾桶重试。')
+            result.update(deletionPending=True,stage='needs_attention',grade='pending',error='删除未完成，请点击卡片上的删除按钮重试。')
         display=display_projection.get(s,c) if display is ... else display
         if display is not None:result['display']=display['card']
         return result

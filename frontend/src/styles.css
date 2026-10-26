@@ -2681,12 +2681,12 @@ select:disabled {
 .remove-error { color: #9b4c40; overflow-wrap: anywhere; }
 
 /* Keep deletion on the card, separate from opening the resume. */
-.product-shell .candidate-card { --card-name-height: 78px; }
+.product-shell .candidate-card { --card-name-height: 62px; }
 .product-shell .card-name strong { flex: 1; }
-.card-header-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.product-shell .card-name .card-hr-mark { margin-right: 0; padding: 5px 9px 5px 14px; }
 .card-delete-action { display: flex; }
 .product-shell .card-delete { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 30px; min-height: 30px; padding: 0; border: 1px solid transparent; background: transparent; color: #87948d; }
 .product-shell .card-delete:hover, .product-shell .card-delete:focus-visible { color: #9b4c40; border-color: #e2c9c3; background: #fff6f3; }
 .remove-candidate-dialog { cursor: default; text-align: left; }
 .product-shell .candidate-card { height: auto; min-height: calc(var(--card-name-height) + var(--card-education-height) + var(--card-match-height) + var(--card-internships-height) + 2px); grid-template-rows: minmax(var(--card-name-height), auto) var(--card-education-height) var(--card-match-height) var(--card-internships-height); }
+
+.card-internships-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }

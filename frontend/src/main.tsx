@@ -510,7 +510,7 @@ function Card({ c, open, run, onDeleted }: { c: CandidateCard; open: () => void;
     <article id={`card-${c.id}`} className="candidate-card" tabIndex={0} aria-label={`查看 ${c.name} 详情`} onClick={() => { if (!c.deletionPending) open(); }} onKeyDown={event => { if (!c.deletionPending && event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open(); } }}>
       <div className="card-name">
         <strong>{c.name}</strong>
-        <div className="card-header-actions"><span className="card-hr-mark" data-decision={c.hrReview?.decision || 'unreviewed'} aria-label={`HR 评价：${c.hrReview?.decision ? hrDecisionLabels[c.hrReview.decision] : '未评价'}`}><small>HR</small>{c.hrReview?.decision ? hrDecisionLabels[c.hrReview.decision] : '未评价'}</span><DeleteCandidate candidate={c} onDeleted={onDeleted} /></div>
+        <span className="card-hr-mark" data-decision={c.hrReview?.decision || 'unreviewed'} aria-label={`HR 评价：${c.hrReview?.decision ? hrDecisionLabels[c.hrReview.decision] : '未评价'}`}><small>HR</small>{c.hrReview?.decision ? hrDecisionLabels[c.hrReview.decision] : '未评价'}</span>
       </div>
       <div className="card-education">
         {c.fictional && <span className="card-fictional">虚构示例</span>}
@@ -540,10 +540,10 @@ function Card({ c, open, run, onDeleted }: { c: CandidateCard; open: () => void;
             {gradeReason && <span className="card-grade-reason" data-reason={gradeReason.code} title={gradeReason.explanation} aria-label={`${c.grade} 级：${gradeReason.label}。${gradeReason.explanation}`}>{c.grade} · {gradeReason.label}</span>}
           </div>
         </div>
-        <div className="card-match-copy"><p className="card-summary">{c.deletionPending ? "删除未完成，请点击右上角垃圾桶重试。" : c.stage === 'failed' || c.stage === 'needs_attention' ? (c.assessmentStatus === 'stale' ? '新标准下的分析尚未完成，上一版结果待更新。' : '分析尚未完成，请查看运行进度。') : c.error || c.display?.summary || (c.matchSummary.startsWith('相关证据：') ? c.matchSummary.slice('相关证据：'.length) : c.matchSummary) || stageLabels[c.stage]}</p></div>
+        <div className="card-match-copy"><p className="card-summary">{c.deletionPending ? "删除未完成，请点击卡片上的删除按钮重试。" : c.stage === 'failed' || c.stage === 'needs_attention' ? (c.assessmentStatus === 'stale' ? '新标准下的分析尚未完成，上一版结果待更新。' : '分析尚未完成，请查看运行进度。') : c.error || c.display?.summary || (c.matchSummary.startsWith('相关证据：') ? c.matchSummary.slice('相关证据：'.length) : c.matchSummary) || stageLabels[c.stage]}</p></div>
       </div>
       <div className="card-internships">
-        <span className="muted">实际实习 · {internships.length} 段</span>
+        <div className="card-internships-heading"><span className="muted">实际实习 · {internships.length} 段</span><DeleteCandidate candidate={c} onDeleted={onDeleted} /></div>
         {internships.slice(0, 3).map((e, i) => (
           <div className="internship-row" key={e.id}>
             <span className="internship-company" title={cardLabel(e.organization)}>
