@@ -237,12 +237,17 @@ def validate_point_grounding(analysis, grounding, require_facts=False):
             errors.append('workflow/other/uncertain focus requires empty capabilities; do not force general problem solving into data_analysis')
         if require_facts and not entry['claims']:
             errors.append('Each positive match requires at least one source-backed candidate fact')
-        for fact in entry['claims']:
+        for fact_index,fact in enumerate(entry['claims']):
             if not fact['claim'].strip():errors.append('Grounding fact must be nonempty')
             if not fact['evidence']:errors.append('Every concrete point claim needs point-local source evidence')
             for ref in fact['evidence']:
                 if not any(r['blockId']==ref['blockId'] and normalize_evidence(ref['quote']) in normalize_evidence(r['quote']) for r in point['evidence']):
-                    errors.append('Concrete claim evidence must be quoted in this same point, not only elsewhere in the assessment')
+                    location=json.dumps({'pointId':point['id'],'claimIndex':fact_index,
+                                         'blockId':ref['blockId'],'quote':ref['quote']},ensure_ascii=False)
+                    errors.append('Concrete claim evidence must be quoted in this same point, not only elsewhere in the assessment: '
+                                  +location+'. If this claim and exact reference are supported by the original document, '
+                                  'include that reference in this point.evidence. Otherwise correct or remove the unsupported '
+                                  'claim/reference. Do not alter quoted text or unrelated points to pass validation.')
     return errors
 
 

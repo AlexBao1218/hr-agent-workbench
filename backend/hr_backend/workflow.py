@@ -246,7 +246,7 @@ class Workflow:
                      'sourceOwnershipContext':source_ownership_context(document,state['profile']),
                      'repairScope':{'mode':'local_correction' if state.get('analysis') else 'initial_analysis',
                                     'preserveValidFacts':True,'preserveUnrelatedFields':True,
-                                    'instruction':'Correct only supplied defects and their directly dependent fields. Reuse valid analysis, exact quotes and target goals; do not regenerate unrelated content. If a match loses a criterion, update dependent verificationTargets.pointId to an existing concern for that same criterion. Keep every target criterionId inside its selected point criterionIds; never restore unsupported match criteria merely to retain old links.'}}
+                                    'instruction':'Correct only supplied defects and their directly dependent fields. Reuse valid analysis, exact quotes and target goals; do not regenerate unrelated content. If a match loses a criterion, update dependent verificationTargets.pointId to an existing concern for that same criterion. Keep every target criterionId inside its selected point criterionIds; never restore unsupported match criteria merely to retain old links. For a point-local claim evidence error, use the supplied pointId/claimIndex/blockId/quote to verify the existing claim reference against the original document, then synchronize that same match point evidence with the valid claim reference. Correct or remove unsupported claims/references instead; never invent or rewrite quotes.'}}
             grounding=[];targets=[]
             try:
                 result=self._call('match',current,MatchResult,trace_callback,attempt,defer_success=True)
