@@ -192,10 +192,13 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         # No credentials in cache metadata. Endpoint fingerprint distinguishes provider deployments.
         provider_type=type(provider).__module__+'.'+type(provider).__qualname__
         endpoint=str(getattr(provider,'_base',None) or 'default-endpoint')
-        return {'mode':provider.mode,'model':provider.model,'providerType':provider_type,
+        identity={'mode':provider.mode,'model':provider.model,'providerType':provider_type,
                 'endpointFingerprint':hashlib.sha256(endpoint.encode()).hexdigest(),
                 'documentId':document['id'],'documentHash':document['hash'],
                 'standardsVersion':standards['version']['id'],'hatVersion':hat['version']['id']}
+        if document['filename'].lower().endswith('.docx'):
+            identity['docxIntegrityVersion']=document.get('_docxIntegrityVersion')
+        return identity
     def trace(rid,event):
         with store.transaction() as s:
             run=s['runs'][rid]
@@ -228,6 +231,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             if s['activeRunId']==rid:s['activeRunId']=None
     def public_document(doc):
         d={k:copy.deepcopy(v) for k,v in doc.items() if k not in ('path','text','hash','blobKey')}
+        d.pop('_docxIntegrityVersion',None)
         for p in d['pages']:
             has_image=p.pop('imagePath',None) or p.pop('imageBlobKey',None)
             p.pop('imageHash',None)
@@ -241,6 +245,8 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         else:
             from hr_documents import parse_document
             result=parse_document(source,str(output),doc['id'])
+        if doc['filename'].lower().endswith('.docx'):
+            result['_docxIntegrityVersion']='complete-source-v1'
         result.update(path=doc['path'],filename=doc['filename'],hash=doc['hash'])
         if remote:
             result['blobKey']=doc['blobKey']
@@ -290,7 +296,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         for cid in cids:
             try:
                 s=store.read(); c=s['candidates'][cid]; doc=s['documents'][c['documentId']]
-                if doc['status']!='ready':
+                if doc['status']!='ready' or (doc['filename'].lower().endswith('.docx') and doc.get('_docxIntegrityVersion')!='complete-source-v1'):
                     with store.transaction() as t:
                         if t['candidates'][cid]['generation']!=generations[cid]:continue
                         t['candidates'][cid]['stage']='parsing'

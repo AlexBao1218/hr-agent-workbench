@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 import zipfile
+import unicodedata
 import pymupdf as fitz
 from PIL import Image, ImageOps
 
@@ -118,6 +119,12 @@ def _docx(path, out, result):
             raise ValueError('Expanded DOCX exceeds 120 MB limit.')
         if 'word/document.xml' not in archive.namelist():
             raise ValueError('Invalid DOCX package.')
+    from docx import Document
+    document = Document(path)
+    paragraphs = [''.join(node.text or '' for node in paragraph.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'))
+                  for paragraph in document.element.body.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p')]
+    def compact(text):
+        return ''.join(c for c in unicodedata.normalize('NFKC', text).casefold() if c.isalnum())
     renderer = _renderer_path()
     if renderer.is_file():
         try:
@@ -130,8 +137,16 @@ def _docx(path, out, result):
                 if not converted.is_file():
                     raise RuntimeError('renderer did not produce PDF')
                 _pdf(converted, out, result)
-                result['previewKind'] = 'rendered'
-                return
+                rendered_text = compact(''.join(block['text'] for block in result['blocks']))
+                if all(not compact(text) or compact(text) in rendered_text for text in paragraphs):
+                    result['previewKind'] = 'rendered'
+                    return
+                # A successful converter can still clip fixed-height content after font substitution.
+                # Never use that incomplete PDF as the source of candidate facts.
+                result['pages'].clear()
+                result['blocks'].clear()
+                result['status'] = 'ready'
+                result['warnings'].append('DOCX 版式预览不完整，现显示完整文字；原文件仍可下载。')
         except Exception as exc:
             result['pages'].clear()
             result['blocks'].clear()
@@ -139,13 +154,10 @@ def _docx(path, out, result):
             result['warnings'].append(f'DOCX renderer failed ({type(exc).__name__}); showing extracted text only.')
     else:
         result['warnings'].append('DOCX layout renderer unavailable. Configure HR_DOCUMENTS_SOFFICE with a headless LibreOffice binary (Linux: install libreoffice-writer; Mac: use the bundled renderer); showing extracted text only.')
-    from docx import Document
-    document = Document(path)
     result['previewKind'] = 'text'
     result['pages'] = [dict(number=1, width=1, height=1, imagePath=None)]
     # XML paragraph order retains paragraphs inside tables; no invented pagination or coordinates.
-    for paragraph in document.element.body.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p'):
-        text = ''.join(node.text or '' for node in paragraph.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'))
+    for text in paragraphs:
         _add(result, 1, text, None)
 
 
