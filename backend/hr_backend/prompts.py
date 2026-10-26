@@ -38,13 +38,22 @@ a page break is not a new employer. Cite the true heading with named activities,
 employer's title onto foreign work. Leave uncertain ownership unspecified.
 '''
 
-PRIOR_EXPERIENCE_RULE = '''PRIOR DOMAIN QUALIFICATION:
-Read description and jdQuote, not title keywords. For required prior hands-on
-experience in a specified domain, that domain is part of the qualification. Generic tools/workflows do NOT
-prove part of that history: absent source linkage to the required domain, coverage is unknown, not partial.
-A domain-unknown caveat does not cure partial coverage; review must reject this scoring error. Retain transferable facts under capability criteria. General workflow/responsibility
-criteria may have partial support for evidenced components, with domain limits explicit. Partial prior-domain
-experience requires evidence of that domain. Do not infer absence, delete valid facts, or add requirements.
+PRIOR_EXPERIENCE_RULE = '''CRITERION MEANING / PRIOR DOMAIN QUALIFICATION (match and review):
+Read the full confirmed description and jdQuote in the original JD context, not title keywords.
+Distinguish a FUTURE JOB RESPONSIBILITY from an explicit PRIOR EXPERIENCE qualification. A responsibility
+to assess workflows or build/integrate systems in a domain does not itself require previous employment or
+projects in that domain. Source-backed transferable components may support partial coverage of that duty;
+state which components are evidenced and keep domain application/integration and other unproven components
+unknown. Partial is not proof of the whole duty or of prior domain experience.
+An explicit prior hands-on domain-experience criterion instead needs sources linking the relevant activity
+to that domain; generic tools/workflows alone leave that experience unknown. When prior experience is
+strongly preferred/bonus, never turn it into a prerequisite for a separate responsibility criterion.
+Preserve EVERY confirmed must/bonus group, priority and requirement. Do not demote domain responsibilities
+to bonus, remove their domain scope, invent experience, infer inability from missing mention, or raise coverage
+without evidence. Match and review must apply these same distinctions to the CURRENT output.
+Every blocker must identify a defect PRESENT in this CURRENT output and quote the offending current field
+or identify the specific missing required element. Never carry forward an earlier defect already corrected,
+treat an already-unknown observation as positive, or turn a conditional reminder into an outstanding blocker.
 '''
 
 VERIFICATION_SCOPE_RULE = '''VERIFICATION TARGET SCOPE (match and review):
@@ -52,9 +61,18 @@ Three questions select gaps; they do NOT test every JD clause. A brief request f
 selected activity is supporting evidence, not a second objective; punctuation alone is not a scope defect. Each singleGoal probes ONE unresolved
 component. Align concern/decisionReason with that component and explicitly retain other unknowns; its
 answer does not establish the whole criterion. Do not reject a goal merely for not asking other clauses.
-Narrow multiple independent asks instead of adding omitted clauses or questions. Integration may be probed
-while from-scratch development remains unknown; failure tracking while privacy/compliance remain unknown.
+Narrow multiple independent asks instead of adding omitted clauses or questions. Select one missing answer
+and leave the others unknown in observations;
+do not demand adding questions for every remaining component. Integration may be probed while from-scratch
+development remains unknown; failure tracking while privacy/compliance remain unknown.
 Preserve full confirmed descriptions and all observations; concise concerns need not repeat every JD verb.
+Each concern represents a shared missing answer, not an entire bundle of criterion clauses. Split unrelated
+headline gaps; if there are more than four, select the material concerns by confirmed priorities instead of
+merging unrelated gaps to fit the limit. Retain all remaining unknowns in their observations.
+Select exactly three distinct targets by confirmed must/bonus priorities, decision value and non-overlap,
+with decisionReason explaining the chosen component. No individual criterion automatically owns a question
+slot; a lower-priority unknown need not displace material higher-priority goals. Do not invent a mandatory
+slot for scheduling, prior-domain experience or any other topic absent an explicit confirmed selection rule.
 Questions are not evidence and never raise coverage. Still reject fabricated facts, missing citations,
 irrelevant anchors, hidden unknowns and claims of full verification from a component. Scope selection does
 not waive source checks or justify omission of material higher-priority gaps without a reason.
