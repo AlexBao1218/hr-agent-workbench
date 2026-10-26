@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from contextlib import contextmanager
 from uuid import uuid4
 from pydantic import ValidationError
-from .provider import ProviderError, OpenAIProvider, structured_output_error
+from .provider import ProviderError, OpenAIProvider, structured_output_error, response_diagnostic
 
 
 def integer_setting(name,default,minimum,maximum):
@@ -133,7 +133,7 @@ class DeepSeekProvider(OpenAIProvider):
                 usage=envelope.get('usage')
                 if envelope.get('status')!='completed':
                     status='incomplete'
-                    raise ProviderError('model_incomplete','Model response did not complete; no automatic repair. Review output cap, timeout and provider status before a new run.')
+                    raise ProviderError('model_incomplete','Model response did not complete; no automatic repair. Review output cap, timeout and provider status before a new run.',response_diagnostic=response_diagnostic(envelope))
                 completed=True
                 response=raw.parse()
             if response.status!='completed' or response.output_parsed is None:

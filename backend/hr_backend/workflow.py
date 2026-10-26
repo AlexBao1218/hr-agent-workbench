@@ -176,6 +176,8 @@ class Workflow:
         try:
             result=schema.model_validate(self.provider.generate(role,request,schema)).model_dump()
         except ProviderError as exc:
+            if exc.response_diagnostic is not None:
+                self._diagnostic(callback,context,role,attempt,{'kind':'provider_response',**exc.response_diagnostic})
             if exc.schema_issues is not None:
                 self._diagnostic(callback,context,role,attempt,{'kind':'schema_validation','schema':schema.__name__,'issues':exc.schema_issues})
             self._event(callback,context,role,'failed',attempt,'Provider call failed')

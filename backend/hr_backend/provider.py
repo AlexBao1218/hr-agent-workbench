@@ -7,10 +7,31 @@ from pydantic_core import ErrorType
 from pydantic import BaseModel, ValidationError
 
 class ProviderError(RuntimeError):
-    def __init__(self, code, message, schema_issues=None):
+    def __init__(self, code, message, schema_issues=None, response_diagnostic=None):
         super().__init__(message)
         self.code, self.message = code, message
         self.schema_issues = schema_issues
+        self.response_diagnostic = response_diagnostic
+
+
+def response_diagnostic(envelope):
+    """Allowlisted envelope metadata only; unknown accounting stays null.
+
+    Never retain messages, output items, error prose, or hidden reasoning text.
+    Unknown provider enum values are classified rather than copied as strings.
+    """
+    def mapping(value):return value if isinstance(value,dict) else {}
+    def enum(value,allowed):return value if isinstance(value,str) and value in allowed else None if value is None else 'unrecognized'
+    def count(value):return value if type(value) is int and 0<=value<=9223372036854775807 else None
+    envelope=mapping(envelope)
+    usage=mapping(envelope.get('usage'))
+    details=mapping(envelope.get('incomplete_details'))
+    output_details=mapping(usage.get('output_tokens_details'))
+    return {'responseStatus':enum(envelope.get('status'),{'completed','incomplete','failed','in_progress','queued','cancelled'}),
+            'incompleteReason':enum(details.get('reason'),{'max_output_tokens','content_filter'}),
+            'usage':{'inputTokens':count(usage.get('input_tokens')),
+                     'outputTokens':count(usage.get('output_tokens')),
+                     'reasoningTokens':count(output_details.get('reasoning_tokens'))}}
 
 def structured_output_error(exc,schema):
     """Only declared field names, list offsets and built-in error codes; never values/messages."""
@@ -61,7 +82,7 @@ class OpenAIProvider:
             client = OpenAI(api_key=self._key, base_url=self._base, timeout=payload.get('_agentRequest',{}).get('timeoutSeconds',90), max_retries=0)
             response = client.responses.parse(**self.request_arguments(role,payload,schema))
             if response.status!='completed':
-                raise ProviderError('model_incomplete','Model response did not complete; review configuration before a new run. No automatic repair.')
+                raise ProviderError('model_incomplete','Model response did not complete; review configuration before a new run. No automatic repair.',response_diagnostic=response_diagnostic(response.model_dump(include={'status','incomplete_details','usage'})))
             if response.output_parsed is None:
                 raise ProviderError('model_refused', 'Model refused or returned no final structured answer. No automatic repair.')
             return response.output_parsed.model_dump()
