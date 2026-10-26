@@ -222,6 +222,9 @@ dropped relevant sources and composite/duplicate goals. A finding names current 
 index (coverage uses null), full current statement and that item's requirementQuote. Coverage findings use an exact
 own-criterion substring. Factual objections cite original evidence.
 Judge actual stated scope, not stylistic repetition. Shared citations alone are harmless.
+Faithful translation/synonyms are pass, not blockers.
+RAG-based AI Assistant means 基于RAG的AI助手; tuned/tested retrieval means 检索调优/测试. Reject only extra claims actually
+present (e.g. independent/from-scratch/production/HR), not invented implications. A same-meaning replacement is cosmetic.
 Return approved=false only with a concrete current blocker; warnings/cosmetic changes do not block. No private reasoning.
 """
 
@@ -288,6 +291,78 @@ warnings remain pass. Code rejects missing/duplicate rows. Return audit outcomes
 """
 
 
+# Same evidence protocol; a reviewed reading recipe replaces fixed JD labels/first-three selection.
+PREVIOUS_OUTCOME_ROW_TASKS = {role:ROLE_INSTRUCTIONS[role] for role in ('match','review','interview')}
+OUTCOME_TASK_RULE = """
+candidate-outcome-v2: In the SAME match response, supply candidate conclusions and a reviewed reading recipe.
+Each supported/partial row has a <=26-char conclusion about THIS candidate, not a JD label. Unknown conclusions name
+the actual missing answer, not ability deficits. Examples: 有AI相关开发经历 / HR场景集成经历待确认, never fixed outputs.
+A heading's modifiers must belong to the SAME evidenced activity: AI work in one project plus another system's
+unspecified pilot does NOT establish AI deployment. Omit an unsupported modifier rather than combine project attributes.
+reading.strength is ONE role-relevant source-backed advantage <=26 chars, with strengthSources row evidence indices.
+Use actual AI/LLM work for an AI role when present, not school/language filler. Context may prove a real transferable
+activity without proving HR qualification. reading.gap is ONE important unresolved conclusion <=22 chars with its
+exact unknown gapSource, or both null. Full strength + ，但 + gap + 。 <=46 chars; no identity/long company-name filler.
+Select3 interviewChoices for this CV's decision value, not first3criteria: normally two source activities plus one gap.
+With two real activities choose two anchored probes, preferably different useful experiences. Context can anchor a
+question but NEVER adds coverage. For evidence, supply one singleGoal and verification conclusion; for unknown,
+reuse its row values with singleGoal/conclusion=null. Set objective=existence/contribution/method/validation/limitations;
+unanchored unknown choices use existence. Keep each goal/question on ONE dimension, not contribution plus validation.
+Explain why each answer matters under confirmed priorities. Do not ask facts already answered or invent HR work.
+Review every row AND this recipe: conclusions/summary/interviewSelection pass|block. Check actual current facts,
+qualifiers, source ownership, useful non-repeated goals and hidden important uncertainty. No question slot quota
+changes coverage. Unselected unknowns remain in observations. Actual substantive defects block; style does not.
+未说明/未提及/未交代 mean unmentioned, NOT absence; replacing these synonyms is never a blocker. 未涉及/没有/不能 may
+assert an unsupported negative. Block only a false assertion actually present, with its current field/index.
+"""
+
+CANDIDATE_ROW_RULES = """
+Rows retain EVERY confirmed criterion, its exact requirement substrings, evidence judgments and ALL genuine unknowns.
+Whole coverage preserves AND/OR/preferences; partial supports a real constituent, not every subpart or a full HR domain.
+If evidence states are all context, row coverage MUST be unknown, not partial. Context is factual background with ZERO support.
+Match action AND object: a generic analytical framework is NOT an LLM/agent framework. Generic product planning
+may support planning/problem-solving, not AI-agent engineering without AI work. Testing one component does not prove optimizing another. Missing HR linkage is 未说明HR场景, never 非HR.
+claim is an exact-source candidate fact; scope states its supported constituent and limits, never invents achieved
+production/adoption/deployment or negated proficiency. Prior HR qualifications need HR-linked sources; related non-domain
+facts use context and never add support. Keep sources/owners separate. A stated lower/unspecified proficiency leaves a
+higher level unproven, not explicitly contradicted. Future declared availability may support duration; past work dates
+never establish future weekly days. Preserve proposals, prototypes, self-reports and research versus implementation.
+Source quotes are contiguous exact original text, including internal spacing; split cross-block sentences into refs.
+For independent missing answers, split them into separate unknowns. No new thresholds, invented gaps, capability inventory or grade.
+Repair only named current defects and directly dependent fields; preserve correct facts, quotes, full basis and unrelated rows.
+"""
+ROLE_INSTRUCTIONS['match']=ROW_TEMPLATE_VERSION+CANDIDATE_ROW_RULES+UNKNOWN_ROW_TASK_RULE+"""
+Return one row per criterion with source-backed evidence, explicit scope, coverage and single-goal unknowns.
+Provide the current schema's candidate conclusions and reading recipe in this same response. No separate global points.
+Keep claim <=180 chars, full basis <=360. Do not add 从零/独立/生产 or fluent-failure qualifiers absent from source.
+"""+OUTCOME_TASK_RULE
+ROLE_INSTRUCTIONS['review']=ROW_TEMPLATE_VERSION+CANDIDATE_ROW_RULES+"""
+Independently audit all current criterionEvidence and selectedUnknowns against original sources and confirmed requirements.
+Check claim AND scope, ownership, meaningful omissions, full coverage, unknowns and reading recipe in ONE pass.
+Return checks for EVERY criterion: facts/scope/coverage/unknowns pass|block. Any block needs a CURRENT finding for that
+criterion, section/index, full current statement and own requirementQuote/source. Use section=scope and quote the EXACT scope
+for a scope defect; do not blame a correct claim for words appearing only in scope.
+Judge actual stated scope, not stylistic repetition. Shared citations alone are harmless.
+Faithful translation/synonyms are pass, not blockers.
+RAG-based AI Assistant means 基于RAG的AI助手; tuned/tested retrieval means 检索调优/测试. Reject only extra claims actually
+present (e.g. independent/from-scratch/production/HR), not invented implications. A same-meaning replacement is cosmetic.
+Do not cite stale drafts, invent subjects, or demand a question for each unselected unknown. Cosmetic preferences/warnings
+remain pass; actual factual/scope/selection defects block. approved=false requires a concrete row or reading blocker.
+"""+OUTCOME_TASK_RULE
+STRUCTURED_EVIDENCE_RULE=STRUCTURED_EVIDENCE_RULE.replace(
+    'Program derives display labels, IDs, priority order and interview\nselection.',
+    'The LLM supplies candidate conclusions and reading/interview selection; program validates indices, ownership and projects IDs/priority order.')
+ROLE_INSTRUCTIONS['interview']+="""
+candidate-outcome-v2: Three questions must turn the reviewed choices into useful interview probes for THIS CV.
+Source-anchored questions name the actual assigned organization and verified activity, then ask the assigned ONE
+missing answer (personal contribution, method, validation or limit). Do not just rephrase a JD requirement. Do not
+ask whether an explicitly documented activity exists. Preserve prototype/research/achieved scope and unknown HR domain.
+For unanchored questions, conditionally ask the approved missing answer; do not borrow another employer's achievements.
+Follow singleObjective: method/contribution questions must not append validation/results checks.
+The same important gap may recur across candidates, but never make all three questions generic HR-experience checks
+when the plan supplies actual candidate activities. Return actual generated questions, never canned templates.
+"""
+
 def row_template_migration(config):
     """Read-only migration proposal; applying it requires explicit CAS settings activation."""
     import difflib
@@ -295,7 +370,7 @@ def row_template_migration(config):
     result={'targetVersion':ROW_TEMPLATE_VERSION,'automaticMigration':False,'roles':{}}
     for role in ('match','review'):
         current=config['roles'][role]['systemPrompt'];target=ROLE_INSTRUCTIONS[role]
-        status='current' if current==target else 'known_previous_default' if current in (LEGACY_ROW_TASKS[role],PREVIOUS_ROW_TASKS[role],PREVIOUS_CONTEXT_ROW_TASKS[role]) else 'custom_requires_review'
+        status='current' if current==target else 'known_previous_default' if current in (LEGACY_ROW_TASKS[role],PREVIOUS_ROW_TASKS[role],PREVIOUS_CONTEXT_ROW_TASKS[role],PREVIOUS_OUTCOME_ROW_TASKS[role]) else 'custom_requires_review'
         result['roles'][role]={'status':status,'currentSha256':hashlib.sha256(current.encode()).hexdigest(),
             'targetSha256':hashlib.sha256(target.encode()).hexdigest(),
             'condition':'Root reviews this exact diff, preserves custom instructions explicitly, then CAS-saves and activates a new version. No automatic replacement.',

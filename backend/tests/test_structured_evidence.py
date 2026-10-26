@@ -443,7 +443,7 @@ def test_rows_program_titles_priority_single_goals_and_public_shape(row_case):
     assert provider.review_payloads[0]['selectedUnknowns']==[{'criterionId':r['criterionId'],'index':0} for r in data['rows']]
     assert not set(provider.review_payloads[0])&{'matches','pointGrounding','evidenceReview'}
     schema=CriterionRowsResult.model_json_schema()
-    assert schema['required']==['rows'] and len(schema['$defs'])==4
+    assert schema['required']==['rows'] and 'CandidateReading' in schema['$defs']
     assert all(e['_diagnostic']['publishable'] for e in events if e.get('_diagnostic',{}).get('kind')=='review_decision')
     changed=deepcopy(row_case);changed[1]['criteria'][0]['priority']=1;changed[1]['criteria'][1]['priority']=0
     analysis,_,targets,_=row_render(changed)
@@ -539,6 +539,8 @@ def test_template_migration_is_explicit_and_custom_tasks_are_not_overwritten(row
     from hr_backend.agent_settings import snapshot_settings
     provider=RowStub(row_case[4]);state={};snapshot=snapshot_settings(state,provider)
     original=deepcopy(snapshot)
+    from hr_backend.prompts import PREVIOUS_OUTCOME_ROW_TASKS
+    for role in ('match','review'):original['roles'][role]['systemPrompt']=PREVIOUS_OUTCOME_ROW_TASKS[role]
     snapshot['roles']['match']['systemPrompt']=LEGACY_ROW_TASKS['match']
     snapshot['roles']['review']['systemPrompt']='User custom review instruction'
     before=deepcopy(snapshot);report=row_template_migration(snapshot)
@@ -561,7 +563,11 @@ def test_rows_api_store_restart_source_read_and_mixed_version_guard(row_case,tmp
     doc,standards,hat,profile,data=row_case
     def parser(path,output_dir,document_id):
         return {**deepcopy(doc),'id':document_id,'filename':'row.pdf','mimeType':'application/pdf','previewKind':'text','pages':[],'warnings':[]}
-    provider=RowStub(data);client=TestClient(create_app(tmp_path,provider,parser))
+    provider=RowStub(data);app=create_app(tmp_path,provider,parser)
+    from hr_backend.prompts import PREVIOUS_OUTCOME_ROW_TASKS
+    with app.state.store.transaction() as state:
+        for role in ('match','review'):state['agentSettings']['roles'][role]['systemPrompt']=PREVIOUS_OUTCOME_ROW_TASKS[role]
+    client=TestClient(app)
     client.put('/api/standards/draft',json={k:standards[k] for k in ('jdText','criteria')})
     confirmed=client.post('/api/standards/confirm',json={'actor':'offline rows test'}).json()['standards']
     upload=client.post('/api/candidates',files={'files':('row.pdf',b'%PDF offline row fixture','application/pdf')}).json()
@@ -672,9 +678,9 @@ def test_unknown_default_task_revision_is_explicit_and_does_not_mutate_saved_tas
     assert config==original and proposal['automaticMigration'] is False
     for role in ('match','review'):
         assert proposal['roles'][role]['status']=='known_previous_default'
-        assert ROLE_INSTRUCTIONS[role].startswith(PREVIOUS_ROW_TASKS[role]+UNKNOWN_ROW_TASK_RULE)
+        assert 'candidate-outcome-v2' in ROLE_INSTRUCTIONS[role] and 'unproven' in ROLE_INSTRUCTIONS[role].lower()
         assert 'never 非HR' in ROLE_INSTRUCTIONS[role]
-        assert 'does not mean the whole' in ROLE_INSTRUCTIONS[role]
+        assert 'Context is factual background with ZERO support' in ROLE_INSTRUCTIONS[role]
     config['roles']['match']['systemPrompt']+=' Custom user rule'
     assert row_template_migration(config)['roles']['match']['status']=='custom_requires_review'
 
@@ -724,9 +730,10 @@ def test_context_template_migration_requires_exact_default_and_split_goal_guidan
     assert config==original
     for role in ('match','review'):
         assert proposal['roles'][role]['status']=='known_previous_default'
-        assert ROLE_INSTRUCTIONS[role].startswith(PREVIOUS_CONTEXT_ROW_TASKS[role]+CONTEXT_ROW_TASK_RULE)
+        assert 'candidate-outcome-v2' in ROLE_INSTRUCTIONS[role]
+        assert 'first eligible unknown' not in ROLE_INSTRUCTIONS[role]
         assert 'split them into separate' in ROLE_INSTRUCTIONS[role]
-        assert 'never partial' in ROLE_INSTRUCTIONS[role]
+        assert 'Prior HR qualifications need HR-linked sources' in ROLE_INSTRUCTIONS[role]
     config['roles']['review']['systemPrompt']+=' custom edits'
     assert row_template_migration(config)['roles']['review']['status']=='custom_requires_review'
 

@@ -103,7 +103,7 @@ def validate_presentation(analysis):
     if len(analysis.get('matches',[]))>6: errors.append('Visible matches must contain at most 6 focused capabilities')
     if len(analysis.get('concerns',[]))>4: errors.append('Select about 3 material concerns, at most 4')
     for point in analysis.get('matches',[])+analysis.get('concerns',[]):
-        for field,limit in [('title',32),('explanation',360)]:
+        for field,limit in [('title',32),('explanation',600 if analysis.get('_readingVersion') else 360)]:
             if len(point[field].strip())>limit:
                 errors.append(f'Visible point {field} exceeds {limit} characters; summarize without losing source scope')
     return errors
@@ -395,16 +395,23 @@ class Workflow:
         current=row_payload(document,standards,hat,context,feedback,state['profile'])
         issues=list(dict.fromkeys(state.get('semanticErrors',[])+state.get('errors',[])))
         if attempt>1:
-            current['repairIssues']=issues
             current['previousRows']=deepcopy(state.get('structuredEvidence',{}))
+            current['repairIssues']=issues
+            current['repairInstruction']='Patch the supplied previousRows at these exact current defects; preserve valid facts/quotes and unrelated rows. Before returning, verify every listed defect is actually eliminated. Return the full corrected object, not an unchanged copy.'
         input_hash=hashlib.sha256(json.dumps(current,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         if state.get('matchInputHash')==input_hash:
             self._diagnostic(callback,context,'match',attempt,{'kind':'repair_stalled','inputHash':input_hash,'providerCalled':False})
             raise WorkflowError('repair_stalled','Matching repair input did not change; stopped without repeating the same model request.')
-        data={};analysis={};grounding=[];targets=[];selected=[];errors=[]
+        data={};analysis={};grounding=[];targets=[];selected=[];errors=[];reference_repairs=[]
         try:
             data=self._call('match',current,CriterionRowsResult,callback,attempt,defer_success=True)
+            from .source_references import resolve_row_references
+            data,reference_repairs=resolve_row_references(data,document,standards)
             analysis,grounding,targets,selected,errors=project_rows(data,standards,state['profile'])
+            from .outcome_reading import READING_VERSION
+            settings=self.run_settings(context['runId'])
+            if settings and READING_VERSION in settings['roles']['match']['systemPrompt'] and self.provider.mode=='live' and not data.get('reading'):
+                errors.append('This active task requires candidate reading conclusions, concise summary and interviewChoices; reading cannot be null.')
             errors+=validate_refs(data,document,detailed=True)
             errors+=validate_source_ownership({'observations':[],'concerns':[]},row_claim_grounding(data),document,state['profile'])
             if not errors:
@@ -416,14 +423,14 @@ class Workflow:
                 # as one employer merely because only one of their printed abbreviations was recognized.
                 errors+=validate_source_ownership({'observations':[],'concerns':analysis['concerns']},grounding,document,state['profile'])
                 errors+=validate_presentation(analysis)
-                analysis['summary']=identity_free_summary(analysis,standards)
+                if not data.get('reading'):analysis['summary']=identity_free_summary(analysis,standards)
         except ProviderError as exc:
             if exc.code!='model_invalid_output':raise
             errors=[exc.message]
         self._event(callback,context,'match','failed' if errors else 'succeeded',attempt,'Criterion evidence rows validated' if not errors else 'Criterion row validation failed')
         self._diagnostic(callback,context,'match',attempt,{'kind':'match_validation','evidenceProtocol':3,
             'structuredEvidence':data,'analysis':analysis,'pointGrounding':grounding,'verificationTargets':targets,
-            'selectedUnknowns':selected,'validationIssues':list(dict.fromkeys(errors))})
+            'selectedUnknowns':selected,'referenceRepairs':reference_repairs,'validationIssues':list(dict.fromkeys(errors))})
         return {'analysis':analysis,'pointGrounding':grounding,'verificationTargets':targets,'structuredEvidence':data or state.get('structuredEvidence',{}),
                 'errors':list(dict.fromkeys(errors)),'attempt':attempt,'approved':False,'matchInputHash':input_hash,'matchInputAttempt':attempt}
 

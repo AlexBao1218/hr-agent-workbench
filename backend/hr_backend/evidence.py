@@ -434,7 +434,7 @@ def interview_plan(analysis,standards,profile,targets=None):
     experiences={e['id']:e for e in profile['experiences']}
     return [{'slot':i+1,'pointId':t['pointId'],'criterionId':t['criterionId'],
              'criterionDescription':criteria[t['criterionId']]['description'],'primaryGoal':t['singleGoal'],
-             'decisionReason':t['decisionReason'],'verificationAngle':'primary','unresolvedPoint':points[t['pointId']]['title'],
+             'decisionReason':t['decisionReason'],'verificationAngle':t.get('objective') if t.get('objective') in ANGLE_PATTERNS else 'primary','singleObjective':t.get('objective'),'unresolvedPoint':points[t['pointId']]['title'],
              'questionMode':'source_anchored' if t['experienceId'] else 'unanchored',
              'sourceBoundary':'Use only assigned evidence; one missing answer, not the whole criterion.',
              'experience':{k:experiences[t['experienceId']][k] for k in ('id','organization','kind')} if t['experienceId'] else None,
@@ -504,6 +504,8 @@ def validate_interview_focus(questions,plans,profile):
     goals=[str(p.get('primaryGoal','')).strip().casefold() for p in plans]
     if all(goals) and len(set(goals))!=3:errors.append('Interview plans must define three distinct dimensions or explicit verification angles')
     for slot,(question,plan) in enumerate(zip(questions,plans),1):
+        from .outcome_reading import objective_errors
+        errors+=objective_errors(question['question'],plan.get('singleObjective'))
         start=len(errors)
         if question['pointIds']!=[plan['pointId']] or question['criterionIds']!=[plan['criterionId']]:
             errors.append('Each interview question must follow its one planned point and primary criterion')
@@ -521,12 +523,21 @@ def validate_interview_focus(questions,plans,profile):
         angle=plan.get('verificationAngle','primary')
         if angle!='primary' and not re.search(ANGLE_PATTERNS[angle],question['question'],re.I):
             errors.append('Question must address its distinct planned verification angle, not paraphrase another goal')
+        # An alias such as "China" in another employer's name must not
+        # misidentify the assigned "China Mathematical Contest ..." as that
+        # employer. Remove only complete assigned names before checking for
+        # an additional organization; cited-source ownership stays mandatory.
+        other_organization_text=question['question']
+        if experience:
+            for own_name in sorted(organization_names(experience['organization']),key=len,reverse=True):
+                own_pattern=re.escape(own_name) if re.search(r'[\u4e00-\u9fff]',own_name) else r'(?<!\w)'+re.escape(own_name)+r'(?!\w)'
+                other_organization_text=re.sub(own_pattern,' ',other_organization_text,flags=re.I)
         for other in profile.get('experiences',[]):
             if experience and (other['id']==experience['id'] or other['organization'].casefold()==experience['organization'].casefold()):continue
             for name in organization_names(other['organization']):
                 # Shared aliases cannot distinguish two experiences; reject conservatively.
                 pattern=re.escape(name) if re.search(r'[\u4e00-\u9fff]',name) else r'(?<!\w)'+re.escape(name)+r'(?!\w)'
-                if re.search(pattern,question['question'],re.I):
+                if re.search(pattern,other_organization_text,re.I):
                     errors.append('Question text names another known experience organization outside the assigned scope')
                     break
         if experience:

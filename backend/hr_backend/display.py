@@ -71,7 +71,11 @@ def project(assessment,standards,grounding,document):
                             'additionalFactCount':len(strings)-len(selected)})
         concerns=sorted(assessment['concerns'],key=priority)
         unknown={'pointId':concerns[0]['id'],'text':concerns[0]['title']} if concerns else None
-        return {'assessmentId':assessment['id'],'matches':matches,'card':card_display(matches,entries,unknown)}
+        card=card_display(matches,entries,unknown)
+        from .outcome_reading import READING_VERSION
+        if assessment.get('_readingVersion')==READING_VERSION:
+            card['summary']=assessment['summary']
+        return {'assessmentId':assessment['id'],'matches':matches,'card':card}
     except (KeyError,TypeError,ValueError,AttributeError):
         return None
 

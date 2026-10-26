@@ -273,6 +273,8 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def publish_result(rid,cid,doc,standards,hat,generations,result,binding_check=None):
         grade,value=rank(standards['criteria'],result['observations'],result['reviewed'])
         assessment=dict(id=uid(),candidateId=cid,runId=rid,standardsVersion=standards['version']['id'],hatVersion=hat['version']['id'],mode=provider.mode,status='current' if result['reviewed'] else 'review_required',grade=grade,rankValue=value,summary=result['summary'],keyUnknown=result.get('keyUnknown'),observations=result['observations'],matches=result['matches'],concerns=result['concerns'],questions=result['questions'],reviewed=result['reviewed'],createdAt=now(),policyVersion=POLICY_VERSION,gradeReason=grade_reason(standards['criteria'],result['observations'],result['reviewed'])[1])
+        if result.get('_readingVersion'):
+            assessment['_readingVersion']=result['_readingVersion']
         with store.transaction() as t:
             latest=t['standards']; cc=t['candidates'].get(cid)
             if cc is None:return False
@@ -350,7 +352,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         run['_generations']=generations
         bg.add_task(process,run['id'],list(cids),standards,hat,generations)
         return run['id']
-    def assessment_wire(a,standards): return {k:v for k,v in reading_order(a,standards).items() if k!='policyVersion'} if a and standards else a
+    def assessment_wire(a,standards): return {k:v for k,v in reading_order(a,standards).items() if k!='policyVersion' and not k.startswith('_')} if a and standards else a
 
     @app.get('/health')
     def health():return {'status':'ok'}

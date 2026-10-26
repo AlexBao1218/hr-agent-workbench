@@ -329,7 +329,11 @@ def validate_rows(data,standards,profile):
         if any(not normalize_evidence(e['claim']) for e in row['evidence']):
             errors.append('Candidate evidence needs a nonempty fact: '+cid)
         if row['coverage'] in ('supported','partial') and not any(s in ('supported','partial') for s in states):
-            errors.append('Positive row requires source-backed support: '+cid)
+            errors.append('Positive row requires source-backed support: '+cid+
+                '. Current coverage='+row['coverage']+', evidence states='+str(states)+
+                '. Context contributes ZERO support. If all facts are only related background, change this row coverage to unknown; '
+                'otherwise correct an evidence state only when its exact requirement constituent is actually supported and explain that limited scope. '
+                'Never upgrade context merely to pass this check. Preserve the true source facts.')
         if row['coverage']=='unknown' and 'contradiction' in states:
             errors.append('Unknown row cannot also assert an explicit conflicting source: '+cid)
         if row['coverage']=='contradiction' and 'contradiction' not in states:
@@ -358,7 +362,11 @@ def _row_fact_key(item):
     return (normalize_evidence(item['claim']),tuple(sorted((r['blockId'],normalize_evidence(r['quote'])) for r in item['evidence'])))
 
 
-def _row_assessment(row,criterion):
+def _row_assessment(row,criterion,reading=False):
+    if reading:
+        if row['coverage']=='supported':return '相关证据支持该项确认标准。'
+        limits=list(dict.fromkeys(g['conclusion'] for g in row['unknowns'] if g.get('conclusion')))
+        return '相关证据提供部分支持。'+('仍待确认：'+'；'.join(limits)+'。' if limits else '该项要求尚未完整体现。')
     scope=next((f.get('scope','').strip() for f in row['evidence'] if f['state'] in ('supported','partial') and f.get('scope','').strip()),'')
     return (scope.rstrip('。')+'。' if scope else '')+('相关证据提供部分支持，其他未知项仍待确认。' if row['coverage']=='partial'
             else '相关证据支持该项确认标准。')
@@ -393,11 +401,11 @@ def project_rows(data,standards,profile):
                 point=owners[_row_fact_key(positive[0])]
                 if cid not in point['criterionIds']:point['criterionIds'].append(cid)
                 if row['coverage']=='partial':
-                    next(g for g in grounding if g['pointId']==point['id'])['assessment']=_row_assessment(row,criterion)
+                    next(g for g in grounding if g['pointId']==point['id'])['assessment']=_row_assessment(row,criterion,bool(data.get('reading')))
                 point['jdRequirement']='；'.join(criteria[i]['description'] for i in point['criterionIds'])
                 point['evidence']=_refs(point['evidence']+[r for f in positive for r in f['evidence']])
             elif len(result['matches'])<6:
-                assessment=_row_assessment(row,criterion);claims=[]
+                assessment=_row_assessment(row,criterion,bool(data.get('reading')));claims=[]
                 # Reuse the existing display bound; never cut a fact/qualification.
                 # All evidence/claims remain complete in the row and observation.
                 for fact in fresh:
@@ -406,7 +414,7 @@ def project_rows(data,standards,profile):
                 if not claims:
                     errors.append('No complete source-backed claim fits the existing 360-character display bound for '+cid+'; shorten the source-backed wording without dropping qualifications. Full row evidence is retained.')
                 else:
-                    point={'id':'match-'+cid,'title':criterion['title'],'criterionIds':[cid],
+                    point={'id':'match-'+cid,'title':row.get('conclusion') or criterion['title'],'criterionIds':[cid],
                            'jdRequirement':criterion['description'],'explanation':'',
                            'evidence':_refs(r for f in positive for r in f['evidence']),'kind':'match'}
                     result['matches'].append(point)
@@ -421,7 +429,14 @@ def project_rows(data,standards,profile):
                 if key in seen_goals:continue
                 seen_goals.add(key)
                 eligible.append({'criterionId':cid,'index':index})
-    # One genuine goal per priority criterion first; use further goals only when fewer than three criteria qualify.
+    if data.get('reading'):
+        by_id={r['criterionId']:r for r in rows}
+        for point in result['matches']:
+            assessments=list(dict.fromkeys(_row_assessment(by_id[cid],criteria[cid],True) for cid in point['criterionIds']))
+            next(g for g in grounding if g['pointId']==point['id'])['assessment']=' '.join(assessments)
+        from .outcome_reading import project_reading
+        return project_reading(data,result,grounding,standards,profile)
+    # Legacy saved rows retain their original deterministic selection.
     selected_criteria=set()
     for choice in eligible:
         if choice['criterionId'] not in selected_criteria and len(selected)<3:
@@ -460,9 +475,10 @@ def validate_row_review(review,data,standards,require_checks=False):
         if section=='coverage':
             text=row['coverage'] if index is None else None
         else:
-            items=row['evidence' if section=='evidence' else 'unknowns']
+            items=row['unknowns' if section=='unknown' else 'evidence']
             item=items[index] if type(index) is int and 0<=index<len(items) else None
-            text=item['claim' if section=='evidence' else 'singleGoal'] if item else None
+            field='scope' if section=='scope' else 'claim' if section=='evidence' else 'singleGoal'
+            text=item.get(field) if item else None
         if text is None or normalize_evidence(text)!=normalize_evidence(finding['statement']):
             errors.append('Review must quote its complete current row subject: '+cid)
         quote=normalize_evidence(finding['requirementQuote'])
@@ -470,9 +486,17 @@ def validate_row_review(review,data,standards,require_checks=False):
             errors.append('Review must quote its own confirmed requirement: '+cid)
         if item and quote not in normalize_evidence(item['requirementQuote']):
             errors.append('Review requirement must address this current item, not another retained subpart: '+cid)
-        if section=='evidence' and not finding['evidence']:
+        if section in ('evidence','scope') and not finding['evidence']:
             errors.append('Factual review objection requires original-source evidence: '+cid)
     blockers=[f for f in review['findings'] if f['severity']=='blocker']
+    reading=review.get('reading')
+    reading_blocked=False
+    if data.get('reading'):
+        if not reading:errors.append('Review must explicitly check candidate conclusions, summary and interview selection')
+        else:
+            reading_blocked=any(reading[k]=='block' for k in ('conclusions','summary','interviewSelection'))
+            if reading_blocked!=bool(reading['issues']):errors.append('Reading review blocks need concrete current issues; passing checks cannot carry blockers')
+            if reading_blocked and review['approved']:errors.append('Blocked reading review cannot be approved')
     checks=review.get('checks',[])
     if require_checks or checks:
         ids=[check['criterionId'] for check in checks]
@@ -486,10 +510,11 @@ def validate_row_review(review,data,standards,require_checks=False):
             if has_block!=(row['criterionId'] in blocked):
                 errors.append('Review check and concrete blocker findings disagree: '+row['criterionId'])
             if has_block and review['approved']:errors.append('Blocked row check cannot be approved')
-    if not review['approved'] and not blockers:errors.append('Rejected row review requires a current concrete blocker')
+    if not review['approved'] and not blockers and not reading_blocked:errors.append('Rejected row review requires a current concrete blocker')
     return list(dict.fromkeys(errors))
 
 
 def row_repair_findings(review):
     return [f"[{f['criterionId']}/{f['section']}/{f['index']}] {f['message']} Current statement: {f['statement']}"
-            for f in review['findings'] if f['severity']=='blocker']
+            for f in review['findings'] if f['severity']=='blocker'] + [
+            '[reading] '+issue for issue in (review.get('reading') or {}).get('issues',[])]

@@ -109,6 +109,8 @@ class DeepSeekProvider(OpenAIProvider):
         if role not in ('jd','cv','match','review','interview','chat','standards_chat'):raise ProviderError('unsupported_role','Unsupported workflow role.')
         if not self.configured:raise ProviderError('provider_unconfigured','Configure the server API key and model before live inference.')
         arguments=self.request_arguments(role,payload,schema)
+        from .response_schema import response_schema
+        arguments['text_format']=response_schema(schema)
         config=payload.get('_agentRequest',{})
         effort=config.get('reasoningEffort',self.role_reasoning.get(role,self.reasoning_effort))
         arguments.update(max_output_tokens=config.get('maxOutputTokens',self.max_tokens),reasoning={'effort':effort})
@@ -118,7 +120,7 @@ class DeepSeekProvider(OpenAIProvider):
             else:arguments.pop('temperature',None)
         else:arguments.pop('temperature',None)
         from openai.lib._pydantic import to_strict_json_schema
-        measured={**arguments,'text_format':to_strict_json_schema(schema)}
+        measured={**arguments,'text_format':to_strict_json_schema(arguments['text_format'])}
         input_bytes=len(json.dumps(measured,ensure_ascii=False).encode('utf-8'))
         if input_bytes>self.max_input_bytes:
             raise ProviderError('input_limit',f'模型输入为 {input_bytes} 字节，超过当前上限 {self.max_input_bytes} 字节（HR_MODEL_MAX_INPUT_BYTES）；本次未发送模型请求。请缩小输入或调整上限后再试。')
@@ -148,7 +150,11 @@ class DeepSeekProvider(OpenAIProvider):
                 raise ProviderError('model_failed','Provider response envelope was invalid; no automatic repair.') from None
             status='invalid_output'
             raise structured_output_error(exc,schema) from None
-        except Exception:
-            raise ProviderError('model_failed','DeepSeek request failed; check server configuration, API access and connectivity. No automatic retry.') from None
+        except Exception as exc:
+            from openai import APIStatusError,APITimeoutError,APIConnectionError
+            kind='http_status' if isinstance(exc,APIStatusError) else 'timeout' if isinstance(exc,APITimeoutError) else 'connection' if isinstance(exc,APIConnectionError) else 'sdk_or_structure'
+            code=getattr(exc,'status_code',None)
+            diagnostic={'responseStatus':'failed','failureKind':kind,'httpStatus':code if type(code) is int and 100<=code<=599 else None}
+            raise ProviderError('model_failed','DeepSeek request failed; check server configuration, API access and connectivity. No automatic retry.',response_diagnostic=diagnostic) from None
         finally:
             self._record(call_id,status,usage)

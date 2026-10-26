@@ -214,30 +214,53 @@ class StructuredReviewResult(Strict):
 
 # Private protocol v3: one row per confirmed criterion, no display/link inventory.
 class CriterionEvidence(Strict):
-    requirementQuote: str = Field(min_length=1, description='Exact confirmed requirement substring this evidence addresses.')
-    state: Literal['supported','partial','contradiction','context'] = Field(description='context retains related source-backed facts only; it supports neither this subrequirement nor overall coverage. partial requires actual support of the quoted subrequirement.')
-    claim: str = Field(min_length=1, max_length=180, description='One source-backed candidate fact, preserving employer and all material qualifications.')
-    scope: str = Field(default='', max_length=120, description='Explain which constituent this fact supports and what it leaves unproven. For context, say why it does not establish this requirement. This is a judgment, not a new candidate fact.')
+    requirementQuote: str = Field(min_length=1, description='Exact smallest meaningful requirement constituent this evidence addresses. Do not quote a whole compound AND clause when only one constituent is supported.')
+    state: Literal['supported','partial','contradiction','context'] = Field(description='partial is real constituent support with material remainder unknown. Context means ZERO relevant constituent support, not merely missing HR domain. Planning, analysis and prototyping can support general problem-solving/builder requirements. Never require every AND piece for partial.')
+    claim: str = Field(min_length=1, max_length=180, description='One source-backed candidate fact, preserving employer and qualifiers. Faithful translation is allowed; never add from-scratch, independent, production or achieved delivery unless the source supports that qualifier.')
+    scope: str = Field(default='', max_length=120, description='Supported constituent and remaining uncertainty only. No additional candidate fact or inflated qualifier. An unmentioned higher proficiency is unproven, not explicitly failed. Context gives zero coverage support.')
     evidence: list[EvidenceRef] = Field(min_length=1)
 
 class CriterionUnknown(Strict):
+    conclusion: str | None = Field(default=None, max_length=26, description='Candidate-specific unresolved conclusion, e.g. HR场景集成经历待确认. Not a copied JD criterion title. No claim of inability from missing evidence.')
     requirementQuote: str = Field(min_length=1, description='Exact confirmed requirement substring with an unresolved answer.')
     singleGoal: str = Field(min_length=1, max_length=180, description='One missing answer only. Other unknowns stay separate; never create gaps to fill interview slots.')
     experienceId: str | None
     evidence: list[EvidenceRef] = Field(description='Only exact sources for that explicitly anchored experience; null experience uses [].')
 
 class CriterionRow(Strict):
+    conclusion: str | None = Field(default=None, max_length=26, description='Source-backed positive conclusion for this candidate, e.g. 有AI相关开发经历. Required for a supported/partial row; do not copy the JD heading or inflate the actual supported scope.')
     criterionId: str
-    coverage: Literal['supported','partial','unknown','contradiction'] = Field(description='Judgment of the FULL confirmed criterion, preserving OR, preferences and scope. Never derive from the highest child state.')
+    coverage: Literal['supported','partial','unknown','contradiction'] = Field(description='Judge the full criterion: supported means its required meaning is evidenced (preserve OR/preferences); partial means meaningful constituent support with material remainder unknown; unknown means applicability/required evidence remains undetermined. Do not demand all AND constituents for partial, or mechanically promote one child to full support. General builder/problem-solving criteria do not require AI/HR delivery.')
     evidence: list[CriterionEvidence]
     unknowns: list[CriterionUnknown] = Field(description='Retain ALL material unresolved subparts, including those not selected for interview.')
 
+class RowReference(Strict):
+    criterionId: str
+    index: int = Field(ge=0)
+
+class ReadingInterviewChoice(Strict):
+    criterionId: str
+    section: Literal['evidence','unknown']
+    index: int = Field(ge=0)
+    objective: Literal['existence','contribution','method','validation','limitations'] = Field(description='Required, never null. Exactly ONE answer dimension for this goal and final question. Method/contribution must not append effect validation. Unanchored unknown choices use existence, not null.')
+    singleGoal: str | None = Field(description='For evidence: one useful missing answer about this real activity (contribution/method/validation/limits). For unknown: null, reuse the exact row singleGoal. Never repeat the whole JD.')
+    conclusion: str | None = Field(description='For evidence: a short honest verification conclusion if a separate concern is needed. For unknown: null, reuse its conclusion.', max_length=26)
+    decisionReason: str = Field(min_length=1, max_length=160)
+
+class CandidateReading(Strict):
+    strength: str = Field(min_length=1, max_length=26, description='One concise source-backed advantage of this candidate, not school prestige or a list of JD headings. Prefer concrete demonstrated work.')
+    strengthSources: list[RowReference] = Field(min_length=1, max_length=3, description='Indices into row evidence supporting every fact in strength; context may establish a real transferable activity, never a claimed HR qualification.')
+    gap: str | None = Field(max_length=22, description='One important actual unresolved conclusion, or null if none. Do not assert lack of ability. Combined strength + ，但 + gap + 。 must be <=46 characters.')
+    gapSource: RowReference | None = Field(description='Exact row unknown supporting gap; null iff gap is null.')
+    interviewChoices: list[ReadingInterviewChoice] = Field(min_length=3,max_length=3, description='Select three decision-useful distinct goals for THIS CV, not the first three criteria. When two useful source-backed activities exist, select two different activity probes; prefer different experiences when useful. Context can anchor a question without proving qualification. Preserve all other unknowns.')
+
 class CriterionRowsResult(Strict):
     rows: list[CriterionRow] = Field(min_length=1)
+    reading: CandidateReading | None = Field(default=None, description='Candidate conclusions, concise card summary and individual interview selection. Independently reviewed in the same flow, no extra model stage.')
 
 class CriterionReviewFinding(Strict):
     criterionId: str
-    section: Literal['coverage','evidence','unknown']
+    section: Literal['coverage','evidence','scope','unknown']
     index: int | None = Field(description='Current zero-based evidence/unknown index; coverage uses null.', ge=0)
     statement: str = Field(min_length=1, description='Exact full CURRENT coverage value, candidate claim or singleGoal being questioned.')
     requirementQuote: str = Field(min_length=1, description='Evidence/unknown findings copy that current item requirementQuote. Coverage findings quote an exact own-criterion substring.')
@@ -252,10 +275,17 @@ class CriterionRowCheck(Strict):
     coverage: Literal['pass','block']
     unknowns: Literal['pass','block']
 
+class CandidateReadingReview(Strict):
+    conclusions: Literal['pass','block']
+    summary: Literal['pass','block']
+    interviewSelection: Literal['pass','block']
+    issues: list[str] = Field(description='Only actual current factual/scope/selection defects, name field/index and correction. No cosmetic blocking or stale findings.')
+
 class CriterionRowsReview(Strict):
     approved: bool
     findings: list[CriterionReviewFinding]
     checks: list[CriterionRowCheck] = Field(default_factory=list, description='One explicit validation result for EVERY current criterion, Any block requires a concrete current blocker finding for that same criterion. These are audit outcomes, not private reasoning.')
+    reading: CandidateReadingReview | None = Field(default=None)
 
 class InterviewQuestion(Strict):
     id: str
