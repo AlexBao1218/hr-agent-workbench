@@ -89,3 +89,7 @@ export interface AgentSnapshot extends AgentConfig { effectivePrompts:Record<Age
 export interface AgentWorkbench { active:AgentConfig;draft:AgentConfig;draftRevision:string;history:AgentConfig[];defaults:AgentConfig;lockedRules:string;lockedRulesByRole?:Record<AgentRole,string>;schemas:Record<AgentRole,unknown>;runtime:AgentRuntime }
 export interface AgentRunSummary { id:ID;status:Run['status'];createdAt:string;candidateNames:string[];settingsVersion:string|null;hasSnapshot:boolean }
 export interface AgentRunDebug { run:Run;settings:AgentSnapshot|null;historicalWarning:string|null;artifacts:{reference:string;role:string;attempt:number;kind:string;data:Record<string,unknown>}[];truncated:boolean }
+
+// User-requested reversible removal; original files, assessments and HR review are retained.
+export interface CandidateRemovalResult { candidateId: ID; removedAt: string }
+export interface RemovedCandidateList { candidates: { id: ID; name: string; removedAt: string }[] }

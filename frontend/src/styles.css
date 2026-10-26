@@ -2661,3 +2661,29 @@ select:disabled {
   .identity-topline { flex-wrap:wrap; gap:10px; }
   .identity-rating { flex-wrap:wrap; gap:7px; }
 }
+
+/* Card status and grade share normal flow instead of overlapping floats. */
+.product-shell .card-match-heading { align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.product-shell .card-match-heading > span { flex-shrink: 0; }
+.product-shell .card-match-status { display: flex; flex: 1 1 auto; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 4px 12px; min-width: 0; }
+.product-shell .card-match-status .progress-card { height: auto; }
+.product-shell .card-match-status .candidate-progress-trigger { float: none; margin: 0; max-width: none; white-space: nowrap; }
+.product-shell .card-grade-reason { white-space: nowrap; }
+.product-shell .criteria-panel > .criteria-edit { margin-top: 20px; }
+
+.detail-navigation .detail-remove { color: #94534a; background: white; border-color: #dfccc6; }
+.remove-candidate-dialog { width: min(420px, calc(100vw - 32px)); padding: 24px; border: 1px solid #d7e2dc; color: #203a30; }
+.remove-candidate-dialog::backdrop { background: #102e254d; }
+.remove-candidate-dialog h2 { margin: 0 0 16px; font-size: 20px; }
+.remove-candidate-dialog p { font-size: 14px; line-height: 1.8; }
+.remove-candidate-dialog .remove-candidate-name { font-weight: 600; overflow-wrap: anywhere; }
+.remove-candidate-dialog footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
+.remove-candidate-dialog .danger-action { background: #9b4c40; border-color: #9b4c40; color: white; }
+.remove-error { color: #9b4c40; overflow-wrap: anywhere; }
+.removed-candidates { margin: 0 0 16px; font-size: 12px; color: #687b71; }
+.removed-candidates > summary { cursor: pointer; width: fit-content; margin-left: auto; }
+.removed-candidates[open] { padding: 12px 16px; border: 1px solid #dce5df; background: white; }
+.removed-candidates p { margin: 12px 0 0; }
+.removed-candidate-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 12px; }
+.removed-candidate-row > span { min-width: 0; overflow-wrap: anywhere; }
+.removed-candidate-row > button { flex-shrink: 0; }

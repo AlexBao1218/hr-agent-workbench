@@ -34,6 +34,7 @@ import { HrReviewEditor, hrDecisionLabels } from "./HrReviewEditor";
 import { StandardsList } from "./StandardsList";
 import { useDocumentGestures } from "./useDocumentGestures";
 import { RunProgress, CandidateRunProgress, hasCandidateProgress, isInputLimitError, runErrorMessage } from "./RunProgress";
+import { RemoveCandidate, RemovedCandidates } from "./CandidateRemoval";
 const grades = {
   A: "建议立即约面",
   B: "可备选",
@@ -371,6 +372,7 @@ function App() {
                     </div>
 
 
+                    <RemovedCandidates onRestored={refresh} />
                     {(["A", "B", "C", "pending"] as const).filter(group=>group!=='pending'||candidates.some(candidate=>boardGroup(candidate)==='pending')).map((g) => (
                       <section className="grade-group" key={g} id={`grade-${g}`}>
                         <h2 className="grade-heading">
@@ -434,6 +436,11 @@ function App() {
                 refresh={refresh}
                 run={run}
                 activeRunId={workspace.activeRunId || list?.activeRunId || null}
+                onRemoved={async (id) => {
+                  setList(current => current ? {...current,candidates:current.candidates.filter(candidate => candidate.id !== id)} : current);
+                  navigate('/');
+                  try { await refresh(); } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+                }}
               />
             ) : (
               <div className="empty">
@@ -471,7 +478,7 @@ function CriteriaPanel({standards,busy,edit,onReorder,onGroupMove}:{standards:St
         <span className="drag-handle" aria-hidden="true">⠿</span><span className="criterion-title"><small>{index+1}</small>{criterion.title}</span><div className="criterion-actions"><button aria-label={`${criterion.title}上移`} disabled={busy||index===0} onClick={()=>void reorder(group,index,index-1)}>↑</button><button aria-label={`${criterion.title}下移`} disabled={busy||index===items.length-1} onClick={()=>void reorder(group,index,index+1)}>↓</button></div>
       </div>)}
       {!itemsFor(group).length&&<div data-empty-group={group} className={`criterion-empty-target ${target?.id===`empty-${group}`?'drop-active':''}`} onDragOver={event=>{if(!drag||busy)return;event.preventDefault();event.dataTransfer.dropEffect='move';setTarget({id:`empty-${group}`,edge:'before',cross:drag.group!==group});}} onDragLeave={()=>setTarget(null)} onDrop={event=>{event.preventDefault();drop(group,0);}}>暂无标准 · 可拖入</div>}
-    </div></div>)}<button onClick={edit}>编辑标准含义 →</button>
+    </div></div>)}<button className="criteria-edit" onClick={edit}>编辑标准含义 →</button>
     <dialog className="group-move-dialog" ref={dialog} aria-labelledby="group-move-title" onCancel={event=>{event.preventDefault();if(!busy&&!submitting.current)setPending(null);}}>
       <h2 id="group-move-title">改为{pending?.request.targetGroup==='bonus'?'加分项':'必须项'}？</h2><p>{pending?.title}</p><p>这会改变岗位条件，并重新分析候选人。</p>{moveError&&<p className="notice error" role="alert">{moveError}</p>}<div className="toolbar"><button disabled={busy} onClick={()=>setPending(null)}>取消</button><button className="primary" disabled={busy||blocked} onClick={()=>void confirm()}>{busy?'正在提交…':'确认并重新分析'}</button></div>
     </dialog>
@@ -522,16 +529,18 @@ function Card({ c, open, run }: { c: CandidateCard; open: () => void; run: Run |
         {c.profile && !c.profile.education.length && <p>教育信息待核对</p>}
       </div>
       <div className="card-match">
-        <span className="muted card-match-heading">
+        <div className="muted card-match-heading">
           <span>匹配概况 {!hasCandidateProgress(c, run) && c.stage!=='ready'&&` · ${stageLabels[c.stage]}`}
           {!hasCandidateProgress(c, run) && c.assessmentStatus === "stale"
             ? " · 旧版本待更新"
             : !hasCandidateProgress(c, run) && c.assessmentStatus === "review_required"
               ? " · 待复核"
               : ""}</span>
-          {gradeReason && <span className="card-grade-reason" data-reason={gradeReason.code} title={gradeReason.explanation} aria-label={`${c.grade} 级：${gradeReason.label}。${gradeReason.explanation}`}>{c.grade} · {gradeReason.label}</span>}
-        </span>
-        <CandidateRunProgress candidate={c} run={run} />
+          <div className="card-match-status">
+            <CandidateRunProgress candidate={c} run={run} />
+            {gradeReason && <span className="card-grade-reason" data-reason={gradeReason.code} title={gradeReason.explanation} aria-label={`${c.grade} 级：${gradeReason.label}。${gradeReason.explanation}`}>{c.grade} · {gradeReason.label}</span>}
+          </div>
+        </div>
         <div className="card-match-copy"><p className="card-summary">{c.stage === 'failed' || c.stage === 'needs_attention' ? (c.assessmentStatus === 'stale' ? '新标准下的分析尚未完成，上一版结果待更新。' : '分析尚未完成，请查看运行进度。') : c.error || c.display?.summary || (c.matchSummary.startsWith('相关证据：') ? c.matchSummary.slice('相关证据：'.length) : c.matchSummary) || stageLabels[c.stage]}</p></div>
       </div>
       <div className="card-internships">
@@ -1042,6 +1051,7 @@ function Detail({
   refresh,
   activeRunId,
   run,
+  onRemoved,
 }: {
   workspace: Workspace;
   id: string;
@@ -1052,6 +1062,7 @@ function Detail({
   refresh: () => Promise<void>;
   activeRunId: string | null;
   run: Run | null;
+  onRemoved: (id: string) => Promise<void>;
 }) {
   const [detail, setDetail] = useState<CandidateDetail | null>(null);
   const [error, setError] = useState("");
@@ -1227,6 +1238,7 @@ function Detail({
               重新分析
             </button>
             <HrReviewEditor key={c.id} candidateId={c.id} value={c.hrReview} onSaved={async hrReview=>{setDetail(current=>current?.candidate.id===c.id?{...current,candidate:{...current.candidate,hrReview}}:current);await refresh();}} />
+            <RemoveCandidate candidate={c} disabled={busy} onRemoved={()=>onRemoved(c.id)} />
         </div>
       </nav>
       <div className="detail-heading">

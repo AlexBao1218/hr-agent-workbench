@@ -160,7 +160,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         if hasattr(exc,'code'): return f'{exc.code}: {getattr(exc,"message","Model processing failed; check server configuration and retry.")}'
         return f'{type(exc).__name__}: Processing failed; verify the document and model configuration, then retry.'
     def get_candidate(s,cid):
-        if cid not in s['candidates']: raise ApiFailure('not_found','Candidate not found',404)
+        if cid not in s['candidates'] or s['candidates'][cid].get('removedAt'): raise ApiFailure('not_found','Candidate not found',404)
         return s['candidates'][cid]
     def card(s,c,display=...):
         a=s['assessments'].get(c.get('assessmentId'))
@@ -176,7 +176,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         if display is not None:result['display']=display['card']
         return result
     def listing(s):
-        cards=[card(s,c) for c in s['candidates'].values()]
+        cards=[card(s,c) for c in s['candidates'].values() if not c.get('removedAt')]
         def key(c):
             a=s['assessments'].get(s['candidates'][c['id']].get('assessmentId'))
             return ({'A':0,'B':1,'C':2,'pending':3}[c['grade']],-a['rankValue'] if a else 0,c['id'])
@@ -202,6 +202,10 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def trace(rid,event):
         with store.transaction() as s:
             run=s['runs'][rid]
+            cid=event.get('candidateId');candidate=s['candidates'].get(cid)
+            expected=run.get('_inputs',{}).get('generations',{}).get(cid)
+            if candidate and (candidate.get('removedAt') or (expected is not None and candidate.get('_lastRemovalGeneration',0)>expected)):
+                raise ApiFailure('stale_candidate','简历已移除，本次处理已停止。',409)
             if '_diagnostic' in event:
                 diagnostic={'runId':rid,'role':event['role'],'attempt':event['attempt'],'candidateId':event.get('candidateId'),'standardsVersion':run['standardsVersion'],'hatVersion':run['hatVersion'],'createdAt':now(),**copy.deepcopy(event['_diagnostic'])}
                 if hasattr(provider,'usage_path'):diagnostic['usageReference']={'ledger':'postgres:model_calls' if remote else 'model-usage.sqlite3','runId':rid}
@@ -266,7 +270,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         assessment=dict(id=uid(),candidateId=cid,runId=rid,standardsVersion=standards['version']['id'],hatVersion=hat['version']['id'],mode=provider.mode,status='current' if result['reviewed'] else 'review_required',grade=grade,rankValue=value,summary=result['summary'],keyUnknown=result.get('keyUnknown'),observations=result['observations'],matches=result['matches'],concerns=result['concerns'],questions=result['questions'],reviewed=result['reviewed'],createdAt=now(),policyVersion=POLICY_VERSION,gradeReason=grade_reason(standards['criteria'],result['observations'],result['reviewed'])[1])
         with store.transaction() as t:
             latest=t['standards']; cc=t['candidates'][cid]
-            eligible=cc['generation']==generations[cid] and hat['version']['id']==t['hat']['version']['id'] and same_meaning(standards,latest)
+            eligible=not cc.get('removedAt') and cc['generation']==generations[cid] and hat['version']['id']==t['hat']['version']['id'] and same_meaning(standards,latest)
             if binding_check is not None:eligible=eligible and binding_check(t)
             if eligible:
                 # Preserve original inference snapshot; attribute priority adoption to its own rank run.
@@ -323,6 +327,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
                             if f['status']=='rechecking': f['status']='needs_review'
         finish_run(rid,errors)
     def schedule(s,bg,cids):
+        cids=[cid for cid in cids if not s['candidates'][cid].get('removedAt')]
         if not cids:return None
         standards=copy.deepcopy(s['standards']);hat=copy.deepcopy(s['hat'])
         run=new_run(s,standards);run['_candidateIds']=list(cids); generations={}
@@ -330,6 +335,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             c=s['candidates'][cid];c['generation']+=1;generations[cid]=c['generation']
             c.update(stage='analyzing' if standards else 'parsing',error=None)
             if c.get('assessmentId'):s['assessments'][c['assessmentId']]['status']='stale'
+        run['_generations']=generations
         bg.add_task(process,run['id'],list(cids),standards,hat,generations)
         return run['id']
     def assessment_wire(a,standards): return {k:v for k,v in reading_order(a,standards).items() if k!='policyVersion'} if a and standards else a
@@ -492,11 +498,14 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             snapshot=store.read()
             for candidate in snapshot['candidates'].values():
                 if snapshot['documents'][candidate['documentId']]['hash']==digest:
+                    if candidate.get('removedAt'):raise ApiFailure('candidate_removed','该简历已移除，可在“已移除”中恢复。',409)
                     return candidate['id'],False
             blobs.put_bytes(key,data,MIMES[suffix])
         with store.transaction() as s:
             for c in s['candidates'].values():
-                if s['documents'][c['documentId']]['hash']==digest:return c['id'],False
+                if s['documents'][c['documentId']]['hash']==digest:
+                    if c.get('removedAt'):raise ApiFailure('candidate_removed','该简历已移除，可在“已移除”中恢复。',409)
+                    return c['id'],False
             if not remote:
                 target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
             s['documents'][did]=dict(id=did,filename=filename,mimeType=MIMES[suffix],status='failed',previewKind='text',pages=[],blocks=[],warnings=[],text='',path=key if remote else str(target),hash=digest)
@@ -537,6 +546,31 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         return dict(candidateIds=ids,runId=rid,errors=errors)
     @app.get('/api/candidates')
     def candidates():return listing(store.read())
+    @app.get('/api/removed-candidates')
+    def removed_candidates():
+        values=[{'id':c['id'],'name':(c.get('profile') or {}).get('name') or c['name'],'removedAt':c['removedAt']}
+                for c in store.read()['candidates'].values() if c.get('removedAt')]
+        return {'candidates':sorted(values,key=lambda c:c['removedAt'],reverse=True)}
+    @app.delete('/api/candidates/{cid}')
+    def remove_candidate(cid:str):
+        with store.transaction() as s:
+            if cid not in s['candidates']:raise ApiFailure('not_found','Candidate not found',404)
+            candidate=s['candidates'][cid]
+            if not candidate.get('removedAt'):
+                candidate['removedAt']=now();candidate['generation']+=1
+                candidate['_lastRemovalGeneration']=candidate['generation']
+            return {'candidateId':cid,'removedAt':candidate['removedAt']}
+    @app.post('/api/candidates/{cid}/restore')
+    def restore_candidate(cid:str):
+        with store.transaction() as s:
+            if cid not in s['candidates']:raise ApiFailure('not_found','Candidate not found',404)
+            candidate=s['candidates'][cid]
+            if candidate.get('removedAt'):
+                candidate.pop('removedAt');candidate['generation']+=1
+                assessment=s['assessments'].get(candidate.get('assessmentId'))
+                current=assessment and assessment['status']=='current' and assessment['reviewed'] and s['standards'] and assessment['standardsVersion']==s['standards']['version']['id'] and assessment['hatVersion']==s['hat']['version']['id']
+                candidate.update(stage='ready' if current else 'needs_attention',error=None if current else '已恢复，请重新分析以更新结果。')
+            return {'candidateId':cid}
     @app.get('/api/candidates/{cid}')
     def detail(cid:str):
         s=store.read();c=get_candidate(s,cid)
@@ -551,7 +585,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             if not s['standards']:raise ApiFailure('standards_required','Confirm job standards before analysis.',409)
             # Explicit recheck joins an already active run for this candidate.
             for r in reversed(list(s['runs'].values())):
-                if r['status'] in ('queued','running') and cid in r.get('_candidateIds',[]) and r['standardsVersion']==s['standards']['version']['id'] and r['hatVersion']==s['hat']['version']['id']:return {'runId':r['id']}
+                if r['status'] in ('queued','running') and cid in r.get('_candidateIds',[]) and r.get('_generations',r.get('_inputs',{}).get('generations',{})).get(cid,0)>=s['candidates'][cid].get('_lastRemovalGeneration',0) and r['standardsVersion']==s['standards']['version']['id'] and r['hatVersion']==s['hat']['version']['id']:return {'runId':r['id']}
             rid=schedule(s,bg,[cid]);s['runs'][rid]['_candidateIds']=[cid]
             return {'runId':rid}
     @app.post('/api/candidates/{cid}/chat')
