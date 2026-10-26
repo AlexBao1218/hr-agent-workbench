@@ -107,6 +107,63 @@ class MatchResult(Strict):
     summary: str = Field(description="Matching evidence and uncertainty only; no candidate name, translated name, alias or other identity narration.")
     keyUnknown: str | None
 
+
+# Private model protocol v2. Public Assessment/AnalysisPoint shapes are projections.
+# Legacy MatchResult remains available for historical diagnostics and explicit fixtures.
+class GroundedFact(Strict):
+    id: str
+    claim: str = Field(min_length=1, max_length=180)
+    evidence: list[EvidenceRef] = Field(min_length=1)
+
+class RequirementComponent(Strict):
+    id: str
+    criterionId: str
+    component: str = Field(min_length=1, max_length=160, description='One independently assessable meaning of the linked exact requirementQuote, phrased naturally. Do not combine independent objectives or add thresholds.')
+    requirementQuote: str = Field(min_length=1, description='Exact contiguous quote from this confirmed description or jdQuote grounding the component; preserve source wording even when a list needs a concise atomic component label.')
+    coverage: Literal['supported','partial','unknown','contradiction']
+    factIds: list[str] = Field(description='Existing canonical facts supporting this component, or contextual facts for unknown. Unknown never means absence/inability. supported/partial/contradiction require facts.')
+
+class CriterionComponents(Strict):
+    criterionId: str
+    coverage: Literal['supported','partial','unknown','contradiction'] = Field(description='One judgment of the FULL confirmed criterion, preserving alternatives/preferences. Do not treat every component as a new mandatory requirement; missing is never contradiction.')
+    componentIds: list[str] = Field(min_length=1, description='Preserve all meaningful components and unknowns of the full confirmed criterion; narrative is projected from these components, not separately rewritten.')
+
+class GroundedPoint(Strict):
+    id: str
+    title: str = Field(min_length=1, max_length=32)
+    factIds: list[str] = Field(min_length=1)
+    componentIds: list[str] = Field(min_length=1, description='Positive supported/partial component(s) and same-criterion limitations only. Do not attach a different criterion merely to narrate its unknowns.')
+    focus: Literal['capability','workflow','other','uncertain']
+    capabilities: list[Literal['rag','python','data_analysis']] = Field(max_length=1)
+    scopeReason: str = Field(min_length=1)
+    supplementaryEvidence: list[EvidenceRef] = Field(description='Relevant clickable context, not asserted facts and not required in the narrative. Never use context alone to invent an achievement.')
+
+class VerificationFocus(Strict):
+    id: str
+    componentId: str = Field(description='Exactly ONE unresolved component. A single ID is not permission to bundle independent questions inside its component text.')
+    label: str = Field(min_length=1, max_length=26, description='Short label for the same missing answer, not a second objective.')
+    objective: Literal['existence','method','contribution','validation','limitations']
+    experienceId: str | None
+    evidence: list[EvidenceRef] = Field(description='Only sources for that explicitly anchored experience. Unanchored existence checks use null/[]; contextual facts do not force an anchor.')
+
+class FocusConcern(Strict):
+    id: str
+    focusId: str = Field(description='Exactly one shared missing-answer focus; no independent free-form concern paragraph.')
+
+class FocusTarget(Strict):
+    id: str
+    focusId: str
+    decisionReason: str = Field(min_length=1, max_length=200, description='Why this single component merits one of three slots under confirmed priorities; other components remain unknown.')
+
+class StructuredMatchResult(Strict):
+    facts: list[GroundedFact] = Field(max_length=32)
+    components: list[RequirementComponent] = Field(min_length=1, max_length=80)
+    observations: list[CriterionComponents]
+    matches: list[GroundedPoint] = Field(max_length=6)
+    focuses: list[VerificationFocus] = Field(min_length=3, max_length=7)
+    concerns: list[FocusConcern] = Field(max_length=4)
+    verificationTargets: list[FocusTarget] = Field(min_length=3, max_length=3)
+
 class SourceExclusion(Strict):
     pointId: str
     blockId: str
@@ -131,6 +188,23 @@ class ReviewResult(Strict):
     sourceExclusions: list[SourceExclusion] = Field(default_factory=list, description='Only explicitly rejected current point/block pairs. New exclusions require approved=false and a blocking issue. Use [] when no source must be removed. Unlisted eligible sources remain required during repair.')
     approved: bool = Field(description='True only when no blocking defect remains. If true, issues MUST be an empty array. False when publication requires correction.')
     issues: list[str] = Field(description='Only concrete unresolved defects that BLOCK publication and require correction. No successful checks, praise, passing explanations, summaries, nonblocking suggestions or low-risk notes. approved=true requires issues=[]. approved=false requires specific actionable blocking defects.')
+
+class GroundedReviewFinding(Strict):
+    subjectType: Literal['fact','component','focus','supplementary_source']
+    subjectId: str = Field(description='An actual current catalog ID; supplementary source IDs are supplied in the review projection.')
+    issueType: Literal['unsupported_fact','criterion_scope','verification_scope','irrelevant_context','presentation']
+    severity: Literal['blocker','warning']
+    statement: str = Field(min_length=1, description='Full current fact/component/focus value being questioned. Preserve qualifications/negation; do not crop a phrase from a qualified claim or quote an earlier draft.')
+    criterionId: str | None
+    requirementQuote: str | None = Field(description='For coverage/goal issues, exact confirmed requirement text supporting the finding.')
+    evidence: list[EvidenceRef] = Field(description='Exact original sources supporting a factual/citation/ownership objection. Do not fabricate a counterquote.')
+    message: str = Field(min_length=1, description='Specific current defect and correction. Supplementary-source findings assess relevance, never demand every context quote appear in prose.')
+
+class StructuredReviewResult(Strict):
+    findings: list[GroundedReviewFinding]
+    approved: bool
+    sourceExclusions: list[SourceExclusion] = Field(default_factory=list)
+    sourceExclusionDecisions: list[SourceExclusionDecision] = Field(default_factory=list)
 
 class InterviewQuestion(Strict):
     id: str

@@ -12,7 +12,9 @@ from langsmith import tracing_context
 from .provider import ProviderError, structured_output_error
 from .evidence import source_ownership_context, validate_source_ownership, reading_order, rebind_repaired_verification_targets, validate_verification_targets, interview_context, profile_navigation, review_context, compose_point_explanations, point_evidence_roles, validate_point_grounding, exclusion_review_context, confirm_source_exclusions, identity_free_summary, validate_source_exclusions, canonical_requirements, capability_index, supplement_capability_sources, validate_capability_coverage, interview_plan, validate_interview_focus
 from .schemas import (JDResult, CandidateProfile, MatchResult, ReviewResult,
+                      StructuredMatchResult, StructuredReviewResult,
                       InterviewResult, ChatResult, StandardsChatResult)
+from .structured_evidence import project_match, review_projection, validate_review as validate_structured_review, repair_findings
 
 class WorkflowError(RuntimeError):
     def __init__(self, code, message):
@@ -116,10 +118,13 @@ class State(TypedDict, total=False):
     sourceExclusions: list
     pointGrounding: list
     verificationTargets: list
+    structuredEvidence: dict
+    semanticErrors: list
 
 class Workflow:
     def __init__(self, provider, max_repairs=None):
         self.provider=provider
+        self.structured_evidence=provider.mode=='live' and not getattr(provider,'legacy_evidence_fixture',False)
         self.settings_resolver=None
         if max_repairs is None:
             try:max_repairs=int(os.getenv('HR_MAX_REPAIRS',str(getattr(provider,'default_max_repairs',1))))
@@ -183,6 +188,7 @@ class Workflow:
             raise WorkflowError('invalid_model_output','Model output failed the required structure; retry the analysis.') from None
         self._diagnostic(callback,context,role,attempt,{'kind':'role_output','schema':schema.__name__,'output':deepcopy(result)})
         if role=='review':
+            result.setdefault('issues',[])
             for finding in result.get('findings',[]):
                 if finding['severity']=='blocker' and finding['message'] not in result['issues']:
                     result['issues'].append(finding['message'])
@@ -242,16 +248,26 @@ class Workflow:
         def match_node(state):
             attempt=state.get('attempt',0)+1
             index=capability_index(document,state['profile'])
-            current={**payload,'profile':profile_navigation(state['profile']),'capabilityEvidenceIndex':index,'previousPointGrounding':state.get('pointGrounding',[]),'previousVerificationTargets':state.get('verificationTargets',[]),'sourceExclusions':state.get('sourceExclusions',[]),'repairIssues':state.get('errors',[]),'previousAnalysis':state.get('analysis'),
+            repair_errors=list(dict.fromkeys(state.get('semanticErrors',[])+state.get('errors',[])))
+            current={**payload,'profile':profile_navigation(state['profile']),'capabilityEvidenceIndex':index,'previousPointGrounding':state.get('pointGrounding',[]),'previousVerificationTargets':state.get('verificationTargets',[]),'sourceExclusions':state.get('sourceExclusions',[]),'repairIssues':repair_errors,'previousAnalysis':state.get('analysis'),
                      'sourceOwnershipContext':source_ownership_context(document,state['profile']),
-                     'repairScope':{'mode':'local_correction' if state.get('analysis') else 'initial_analysis',
+                     'repairScope':{'mode':'local_correction' if state.get('analysis') or (self.structured_evidence and state.get('structuredEvidence')) else 'initial_analysis',
                                     'preserveValidFacts':True,'preserveUnrelatedFields':True,
                                     'instruction':'Correct only supplied defects and their directly dependent fields. Reuse valid analysis, exact quotes and target goals; do not regenerate unrelated content. If a match loses a criterion, update dependent verificationTargets.pointId to an existing concern for that same criterion. Keep every target criterionId inside its selected point criterionIds; never restore unsupported match criteria merely to retain old links. For a point-local claim evidence error, use the supplied pointId/claimIndex/blockId/quote to verify the existing claim reference against the original document, then synchronize that same match point evidence with the valid claim reference. Correct or remove unsupported claims/references instead; never invent or rewrite quotes.'}}
-            grounding=[];targets=[]
+            if self.structured_evidence:
+                for field in ('previousPointGrounding','previousVerificationTargets','previousAnalysis'):current.pop(field)
+                current['previousStructuredEvidence']=state.get('structuredEvidence')
+                current['repairScope']['instruction']='Correct the supplied defects in the private fact/component/focus graph and dependent references. Preserve unrelated facts, exact sources and IDs. Keep every component in its observation; derive point wording and target links through the same objects. Do not add a separate assessment/narrative or invent evidence.'
+            grounding=[];targets=[];structured={}
             try:
-                result=self._call('match',current,MatchResult,trace_callback,attempt,defer_success=True)
-                grounding=result.pop('pointGrounding')
-                targets=result.pop('verificationTargets')
+                result=self._call('match',current,StructuredMatchResult if self.structured_evidence else MatchResult,trace_callback,attempt,defer_success=True)
+                if self.structured_evidence:
+                    structured=result
+                    result,grounding,targets,structure_errors=project_match(structured,standards,state['profile'])
+                else:
+                    structure_errors=[]
+                    grounding=result.pop('pointGrounding')
+                    targets=result.pop('verificationTargets')
                 result=compose_point_explanations(result,grounding)
                 result=canonical_requirements(result,standards)
                 result,additions=supplement_capability_sources(result,index,exclusions=state.get('sourceExclusions',[]),grounding=grounding)
@@ -259,7 +275,11 @@ class Workflow:
                 result=reading_order(result,standards)
                 targets,rebindings=rebind_repaired_verification_targets(targets,result,state.get('analysis'),standards)
                 if rebindings:self._diagnostic(trace_callback,context,'match',attempt,{'kind':'verification_target_rebinding','changes':rebindings})
-                errors=validate_analysis(result,document,standards)
+                errors=structure_errors+validate_analysis(result,document,standards)
+                if structured:
+                    errors+=validate_refs(structured,document)
+                    errors+=validate_source_ownership({'observations':[],'concerns':[]},
+                        [{'pointId':f['id'],'claims':[f]} for f in structured['facts']],document,state['profile'])
                 errors+=validate_verification_targets(targets,result,standards,state['profile'])+validate_refs(targets,document)
                 errors+=validate_point_grounding(result,grounding,require_facts=self.provider.mode=='live')+validate_refs(grounding,document)
                 errors+=validate_source_ownership(result,grounding,document,state['profile'])
@@ -276,8 +296,10 @@ class Workflow:
                 result={}
                 errors=[exc.message]
             self._event(trace_callback,context,'match','failed' if errors else 'succeeded',attempt,'Deterministic match validation failed' if errors else 'Match structure and evidence validated')
-            self._diagnostic(trace_callback,context,'match',attempt,{'kind':'match_validation','analysis':result,'pointGrounding':grounding,'verificationTargets':targets,'validationIssues':errors})
-            return {'analysis':result,'pointGrounding':grounding,'verificationTargets':targets,'errors':errors,'attempt':attempt,'approved':False}
+            self._diagnostic(trace_callback,context,'match',attempt,{'kind':'match_validation','analysis':result,'pointGrounding':grounding,'verificationTargets':targets,'validationIssues':errors,
+                **({'evidenceProtocol':2,'structuredEvidence':structured} if self.structured_evidence else {})})
+            return {'analysis':result,'pointGrounding':grounding,'verificationTargets':targets,'errors':errors,'attempt':attempt,'approved':False,
+                    'structuredEvidence':structured or state.get('structuredEvidence',{})}
 
         def review_node(state):
             if state['errors']:
@@ -290,10 +312,18 @@ class Workflow:
                 return {'approved':False,'errors':state['errors']}
             index=capability_index(document,state['profile'])
             pending=exclusion_review_context(state['analysis'],state.get('sourceExclusions',[]),index,state['pointGrounding'])
-            review=self._call('review',{**payload,'profile':profile_navigation(state['profile']),'analysis':state['analysis'],'verificationTargets':state['verificationTargets'],
-                **review_context(state['analysis'],state['pointGrounding'],index),
+            review_data={'analysis':state['analysis'],'verificationTargets':state['verificationTargets'],
+                         **review_context(state['analysis'],state['pointGrounding'],index)}
+            if self.structured_evidence:
+                projection,_=review_projection(state['structuredEvidence'],state['analysis'])
+                review_data={'evidenceReview':projection,'capabilityEvidenceIndex':review_data['capabilityEvidenceIndex']}
+            review=self._call('review',{**payload,'profile':profile_navigation(state['profile']),**review_data,
                 'pendingSourceExclusions':pending,'sourceOwnershipContext':source_ownership_context(document,state['profile']),
-                'capabilityIndexPolicy':'Retrieval candidates only, not scored claims. An irrelevant index hit alone is not a publication blocker; reject only when it causes unsupported analysis, grounding or coverage. Do not ask match to edit a code-generated index.'},ReviewResult,trace_callback,state['attempt'],defer_success=True)
+                'capabilityIndexPolicy':'Retrieval candidates only, not scored claims. An irrelevant index hit alone is not a publication blocker; reject only when it causes unsupported analysis, grounding or coverage. Do not ask match to edit a code-generated index.'},StructuredReviewResult if self.structured_evidence else ReviewResult,trace_callback,state['attempt'],defer_success=True)
+            review_contract_errors=[]
+            if self.structured_evidence:
+                review_contract_errors=validate_structured_review(review,state['structuredEvidence'],state['analysis'],standards)+validate_refs(review,document)
+                review['issues']=repair_findings(review)
             accepted,exclusion_errors=validate_source_exclusions(review['sourceExclusions'],state['analysis'],index,state['pointGrounding'])
             if review['sourceExclusions'] and (review['approved'] or not review['issues']):
                 exclusion_errors.append('New source exclusions require rejected review with an actionable blocking issue')
@@ -301,14 +331,17 @@ class Workflow:
             retained,confirmation_errors=confirm_source_exclusions(pending,review['sourceExclusionDecisions'])
             exclusion_errors+=confirmation_errors
             exclusions=retained+accepted
-            errors=state['errors']+review['issues']+exclusion_errors
+            errors=state['errors']+review['issues']+exclusion_errors+review_contract_errors
             approved=review['approved'] and not errors
             self._event(trace_callback,context,'review','succeeded' if approved else 'failed',state['attempt'],'Evidence review passed' if approved else 'Evidence review rejected publication')
-            self._diagnostic(trace_callback,context,'review',state['attempt'],{'kind':'review_decision','analysis':state['analysis'],'verificationTargets':state['verificationTargets'],'pointEvidenceRoles':point_evidence_roles(state['analysis'],state['pointGrounding']),'pointGrounding':state['pointGrounding'],'validationIssues':state['errors'],'reviewIssues':review['issues'],'findings':review.get('findings',[]),'reviewApproved':review['approved'],'sourceExclusions':exclusions,'pendingSourceExclusions':pending,'sourceExclusionDecisions':review['sourceExclusionDecisions'],'exclusionValidationIssues':exclusion_errors,'publishable':approved})
+            self._diagnostic(trace_callback,context,'review',state['attempt'],{'kind':'review_decision','analysis':state['analysis'],'verificationTargets':state['verificationTargets'],'pointEvidenceRoles':point_evidence_roles(state['analysis'],state['pointGrounding']),'pointGrounding':state['pointGrounding'],'validationIssues':state['errors'],'reviewIssues':review['issues'],'findings':review.get('findings',[]),'reviewApproved':review['approved'],'sourceExclusions':exclusions,'pendingSourceExclusions':pending,'sourceExclusionDecisions':review['sourceExclusionDecisions'],'exclusionValidationIssues':exclusion_errors,'reviewContractIssues':review_contract_errors,'publishable':approved})
+            if review_contract_errors:
+                raise WorkflowError('review_contract_invalid','Review findings are not grounded in current subjects/sources: '+'; '.join(review_contract_errors))
             if not approved and state['attempt']>max_repairs:
                 self._event(trace_callback,context,'review','failed',state['attempt'],'Bounded repair exhausted; assessment not publishable')
                 raise WorkflowError('review_failed','Evidence review did not pass after bounded repair. Inspect sources or correct the input and retry.')
-            return {'approved':approved,'sourceExclusions':exclusions,'errors':errors or ([] if approved else ['Independent review rejected output'])}
+            remaining=errors or ([] if approved else ['Independent review rejected output'])
+            return {'approved':approved,'sourceExclusions':exclusions,'errors':remaining,'semanticErrors':[] if approved else remaining}
 
         def interview_node(state):
             return self.interview_only(document,standards,hat,state['profile'],state['analysis'],run_id,candidate_id,trace_callback,feedback=feedback,targets=state['verificationTargets'])

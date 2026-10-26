@@ -71,7 +71,7 @@ def runtime_settings(provider):
 
 
 def locked_rules(role=None):
-    shared = prompts.PROJECT_DOMAIN_RULE+'\n'+prompts.PRIOR_EXPERIENCE_RULE+'\n'+prompts.VERIFICATION_SCOPE_RULE
+    shared = prompts.PROJECT_DOMAIN_RULE+'\n'+prompts.PRIOR_EXPERIENCE_RULE+'\n'+prompts.VERIFICATION_SCOPE_RULE+'\n'+prompts.STRUCTURED_EVIDENCE_RULE
     return prompts.COMMON+'\n'+(shared+'\n' if role is None or role in ('match', 'review') else '')
 
 

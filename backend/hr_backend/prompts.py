@@ -19,67 +19,48 @@ Candidate names/aliases must be exact source names, never transliterations or gu
 
 # One shared, source-entailment rule placed before both active role tasks.
 PROJECT_DOMAIN_RULE = '''PROJECT-DOMAIN EVIDENCE CHECK:
-A domain/department claim needs evidence explicitly linking THAT activity, document set or project to it.
-Company industry/product background and neighboring projects are not that link; preserve context without
-transferring its domain. Company hospital-software background + unspecified knowledge-base documents does
-not prove medical documents. An explicitly purchasing-team assistant supports purchasing for that project;
-another unspecified project stays unknown. Keep supported sectors and unknown project domains separate.
-Missing X means "X not mentioned", NEVER "non-X" or "all projects were non-X/均为非X".
-Audit observations.explanation, matches (facts AND assessment), concerns and scopeReason. A final "HR待确认"
-does NOT cure an earlier unsupported all-non-HR assertion: it is a factual blocker, not stylistic repetition.
-Generate source-local wording; review must reject violations, naming the actual field/text and missing source
-connection. Preserve valid facts; correct erroneous coverage, never adjust a grade by hand.
-For every observation and point, cite EACH asserted activity in that item's own evidence array. A quote
-elsewhere in the assessment does not support this sentence. When combining experiences, name the employer
-for each clause; never let one employer govern another's activity. Split ambiguous clauses and add their
-exact local references, or remove unsupported assertions. Check ownership AND citation completeness.
-sourceOwnershipContext supplies printed headings and cross-page navigation. Verify against source;
-a page break is not a new employer. Cite the true heading with named activities, never paste a wrong
-employer's title onto foreign work. Leave uncertain ownership unspecified.
+A domain claim needs source linkage to THAT activity, document set or project.
+Company industry/product background and neighboring projects are not that link;
+another unspecified project stays unknown. Missing X means unmentioned, NEVER "non-X".
+Audit observations.explanation and matches (facts AND assessment): an unknown caveat
+does NOT cure an earlier unsupported assertion; that is a factual blocker.
+For every item, cite EACH asserted activity in that item's own evidence array; name the employer
+for each clause. sourceOwnershipContext is printed-heading navigation only. Verify ownership,
+including across pages; preserve qualifications and original source text.
 '''
 
-PRIOR_EXPERIENCE_RULE = '''CRITERION MEANING / PRIOR DOMAIN QUALIFICATION (match and review):
-Read the full confirmed description and jdQuote in the original JD context, not title keywords.
-Distinguish a FUTURE JOB RESPONSIBILITY from an explicit PRIOR EXPERIENCE qualification. A responsibility
-to assess workflows or build/integrate systems in a domain does not itself require previous employment or
-projects in that domain. Source-backed transferable components may support partial coverage of that duty;
-state which components are evidenced and keep domain application/integration and other unproven components
-unknown. Partial is not proof of the whole duty or of prior domain experience.
-An explicit prior hands-on domain-experience criterion instead needs sources linking the relevant activity
-to that domain; generic tools/workflows alone leave that experience unknown. When prior experience is
-strongly preferred/bonus, never turn it into a prerequisite for a separate responsibility criterion.
-Preserve EVERY confirmed must/bonus group, priority and requirement. Do not demote domain responsibilities
-to bonus, remove their domain scope, invent experience, infer inability from missing mention, or raise coverage
-without evidence. Match and review must apply these same distinctions to the CURRENT output.
-Every blocker must identify a defect PRESENT in this CURRENT output and quote the offending current field
-or identify the specific missing required element. Never carry forward an earlier defect already corrected,
-treat an already-unknown observation as positive, or turn a conditional reminder into an outstanding blocker.
+PRIOR_EXPERIENCE_RULE = '''PRIOR DOMAIN QUALIFICATION:
+A FUTURE JOB RESPONSIBILITY is not a PRIOR EXPERIENCE qualification. General workflow/responsibility
+criteria may have partial support from evidenced transferable components; domain application stays unknown.
+Prior-domain bonus: never turn it into a prerequisite for a separate responsibility criterion.
+For explicit prior-domain experience, absent source linkage to the required domain, coverage is unknown, not partial;
+review must reject this scoring error. Partial prior-domain
+experience requires evidence of that domain. Preserve EVERY confirmed must/bonus group, priority and requirement.
+Every blocker names a defect PRESENT in this CURRENT output, with its actual field/source. Do not carry
+forward corrected findings or turn already-unknown states/conditional reminders into positive claims.
 '''
 
 VERIFICATION_SCOPE_RULE = '''VERIFICATION TARGET SCOPE (match and review):
-Three questions select gaps; they do NOT test every JD clause. A brief request for an example of the SAME
-selected activity is supporting evidence, not a second objective; punctuation alone is not a scope defect. Each singleGoal probes ONE unresolved
-component. Align concern/decisionReason with that component and explicitly retain other unknowns; its
-answer does not establish the whole criterion. Do not reject a goal merely for not asking other clauses.
-Narrow multiple independent asks instead of adding omitted clauses or questions. Select one missing answer
-and leave the others unknown in observations;
-do not demand adding questions for every remaining component. Integration may be probed while from-scratch
-development remains unknown; failure tracking while privacy/compliance remain unknown.
-Preserve full confirmed descriptions and all observations; concise concerns need not repeat every JD verb.
-Each concern represents a shared missing answer, not an entire bundle of criterion clauses. Split unrelated
-headline gaps; if there are more than four, select the material concerns by confirmed priorities instead of
-merging unrelated gaps to fit the limit. Retain all remaining unknowns in their observations.
-Select exactly three distinct targets by confirmed must/bonus priorities, decision value and non-overlap,
-with decisionReason explaining the chosen component. No individual criterion automatically owns a question
-slot; a lower-priority unknown need not displace material higher-priority goals. Do not invent a mandatory
-slot for scheduling, prior-domain experience or any other topic absent an explicit confirmed selection rule.
+Exactly3targets select ONE missing answer each, not every JD clause. A same-activity example is not another goal.
+Do not reject a goal merely for not asking other clauses. Narrow multiple independent asks instead of adding omitted clauses.
 Questions are not evidence and never raise coverage. Still reject fabricated facts, missing citations,
-irrelevant anchors, hidden unknowns and claims of full verification from a component. Scope selection does
-not waive source checks or justify omission of material higher-priority gaps without a reason.
-Unanchored targets MUST use experienceId=null and evidence=[]; singleGoal asks conditionally WHETHER
-relevant experience exists. Remove CV-derived premises (e.g. "besides embeddings") instead of adding
-citations. Review must not demand the contradictory repair. Anchor only when THAT experience itself
-is the subject; unrelated known projects cannot anchor questions about other possible experience.
+irrelevant anchors and hidden unknowns. Concerns share one missing answer; select <=4instead of merging unrelated gaps.
+Retain all remaining unknowns in their observations. No individual criterion automatically owns a question slot;
+use confirmed priorities/decision value/non-overlap, with reasons. Scope selection does not waive sources.
+Unanchored checks use existence/null/[]; anchor only to the actual relevant activity, never borrowed project premises.
+'''
+
+STRUCTURED_EVIDENCE_RULE = '''PRIVATE PROTOCOL v2: current schema overrides obsolete field names in saved tasks.
+MATCH: facts(id/claim/evidence) are canonical. Components have ONE meaning, exact requirementQuote, state and factIds.
+Observations retain all criterion components and one full-criterion coverage judgment; preserve alternatives/preferences.
+Matches link existing facts/components, plus supplementaryEvidence. One headline owner per fact; limitations belong
+only to positive linked criteria. No separately authored explanation/assessment/summary. Code renders these objects.
+Each focus has ONE componentId/objective; concern and target link ONE focusId. Don't hide compound goals in a label.
+REVIEW evidenceReview CURRENT facts/components/focuses against originals. Supplementary sources are context,
+not asserted facts; judge relevance, never demand all context in prose. Each finding binds actual subjectType/Id,
+exact current statement and source/requirement basis. issueType: unsupported_fact→fact, criterion_scope→component,
+verification_scope→focus, irrelevant_context→supplementary_source. Reject genuine composite goals/false facts;
+no invented subject, stale statement or cosmetic blocker. Return StructuredReviewResult, not duplicate issues prose.
 '''
 
 
@@ -194,8 +175,8 @@ Use concise Chinese titles and distinguish preference from requirement.''',
 
 
 def role_instructions(role):
-    return COMMON+'\n'+(PROJECT_DOMAIN_RULE+'\n'+PRIOR_EXPERIENCE_RULE+'\n'+VERIFICATION_SCOPE_RULE+'\n' if role in ('match','review') else '')+'Active role: '+role+'\n'+ROLE_INSTRUCTIONS[role]
+    return COMMON+'\n'+(PROJECT_DOMAIN_RULE+'\n'+PRIOR_EXPERIENCE_RULE+'\n'+VERIFICATION_SCOPE_RULE+'\n'+STRUCTURED_EVIDENCE_RULE+'\n' if role in ('match','review') else '')+'Active role: '+role+'\n'+ROLE_INSTRUCTIONS[role]
 
 
 # Aggregate for offline policy inspection only. Provider sends just the active role.
-SYSTEM = COMMON+'\n'+PROJECT_DOMAIN_RULE+'\n'+PRIOR_EXPERIENCE_RULE+'\n'+VERIFICATION_SCOPE_RULE+'\n'+'\n'.join(ROLE_INSTRUCTIONS.values())
+SYSTEM = COMMON+'\n'+PROJECT_DOMAIN_RULE+'\n'+PRIOR_EXPERIENCE_RULE+'\n'+VERIFICATION_SCOPE_RULE+'\n'+STRUCTURED_EVIDENCE_RULE+'\n'+'\n'.join(ROLE_INSTRUCTIONS.values())

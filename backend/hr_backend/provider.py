@@ -162,6 +162,7 @@ class FixtureProvider:
     Live acceptance must exercise the real provider independently.
     """
     mode, configured, model = 'fixture', True, 'deterministic-fixture-v1'
+    legacy_evidence_fixture = True  # Explicit offline adapter, never a live-output fallback.
 
     def generate(self, role, payload, schema):
         if role == 'jd':
