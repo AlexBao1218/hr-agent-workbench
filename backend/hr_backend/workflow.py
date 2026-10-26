@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from langgraph.graph import StateGraph, START, END
 from langsmith import tracing_context
 from .provider import ProviderError, structured_output_error
-from .evidence import source_ownership_context, validate_source_ownership, reading_order, validate_verification_targets, interview_context, profile_navigation, review_context, compose_point_explanations, point_evidence_roles, validate_point_grounding, exclusion_review_context, confirm_source_exclusions, identity_free_summary, validate_source_exclusions, canonical_requirements, capability_index, supplement_capability_sources, validate_capability_coverage, interview_plan, validate_interview_focus
+from .evidence import source_ownership_context, validate_source_ownership, reading_order, rebind_repaired_verification_targets, validate_verification_targets, interview_context, profile_navigation, review_context, compose_point_explanations, point_evidence_roles, validate_point_grounding, exclusion_review_context, confirm_source_exclusions, identity_free_summary, validate_source_exclusions, canonical_requirements, capability_index, supplement_capability_sources, validate_capability_coverage, interview_plan, validate_interview_focus
 from .schemas import (JDResult, CandidateProfile, MatchResult, ReviewResult,
                       InterviewResult, ChatResult, StandardsChatResult)
 
@@ -246,7 +246,7 @@ class Workflow:
                      'sourceOwnershipContext':source_ownership_context(document,state['profile']),
                      'repairScope':{'mode':'local_correction' if state.get('analysis') else 'initial_analysis',
                                     'preserveValidFacts':True,'preserveUnrelatedFields':True,
-                                    'instruction':'Correct only supplied defects and their directly dependent fields. Reuse valid analysis, exact quotes and verification targets; do not regenerate unrelated content.'}}
+                                    'instruction':'Correct only supplied defects and their directly dependent fields. Reuse valid analysis, exact quotes and target goals; do not regenerate unrelated content. If a match loses a criterion, update dependent verificationTargets.pointId to an existing concern for that same criterion. Keep every target criterionId inside its selected point criterionIds; never restore unsupported match criteria merely to retain old links.'}}
             grounding=[];targets=[]
             try:
                 result=self._call('match',current,MatchResult,trace_callback,attempt,defer_success=True)
@@ -257,6 +257,8 @@ class Workflow:
                 result,additions=supplement_capability_sources(result,index,exclusions=state.get('sourceExclusions',[]),grounding=grounding)
                 if additions:self._diagnostic(trace_callback,context,'match',attempt,{'kind':'source_coverage','additions':additions})
                 result=reading_order(result,standards)
+                targets,rebindings=rebind_repaired_verification_targets(targets,result,state.get('analysis'),standards)
+                if rebindings:self._diagnostic(trace_callback,context,'match',attempt,{'kind':'verification_target_rebinding','changes':rebindings})
                 errors=validate_analysis(result,document,standards)
                 errors+=validate_verification_targets(targets,result,standards,state['profile'])+validate_refs(targets,document)
                 errors+=validate_point_grounding(result,grounding,require_facts=self.provider.mode=='live')+validate_refs(grounding,document)

@@ -368,6 +368,35 @@ def reading_order(analysis,standards):
     return result
 
 
+def rebind_repaired_verification_targets(targets,analysis,previous_analysis,standards):
+    """Repair only a dangling unanchored link after a match loses its criterion.
+
+    No criterion, goal, evidence or analysis content is changed. A unique existing
+    concern supplies the replacement link; normal validation AND semantic review
+    still decide whether the resulting target is acceptable.
+    """
+    result=deepcopy(targets);changes=[]
+    if not previous_analysis:return result,changes
+    prior={p['id']:p for p in previous_analysis.get('matches',[])}
+    current={p['id']:p for p in analysis.get('matches',[])}
+    confirmed={c['id'] for c in standards['criteria']}
+    all_points=analysis.get('matches',[])+analysis.get('concerns',[])
+    if len({p['id'] for p in all_points})!=len(all_points):return result,changes
+    for target in result:
+        point_id=target['pointId'];criterion=target['criterionId']
+        if (target['experienceId'] is not None or target['evidence'] or criterion not in confirmed
+            or point_id not in prior or point_id not in current
+            or criterion not in prior[point_id]['criterionIds']
+            or criterion in current[point_id]['criterionIds']):continue
+        candidates=[p for p in analysis.get('concerns',[]) if criterion in p['criterionIds']]
+        if len(candidates)!=1:continue
+        target['pointId']=candidates[0]['id']
+        changes.append({'targetId':target['id'],'criterionId':criterion,
+                        'previousPointId':point_id,'pointId':target['pointId'],
+                        'reason':'Removed match criterion has one existing concern; unanchored goal and evidence unchanged.'})
+    return result,changes
+
+
 def validate_verification_targets(targets,analysis,standards,profile):
     """Check IDs and exact source ownership; semantic choice belongs to review."""
     if len(targets)!=3:return ['Match must propose three reviewed single-purpose verification targets']
@@ -379,7 +408,10 @@ def validate_verification_targets(targets,analysis,standards,profile):
     for t in targets:
         point=points.get(t['pointId'])
         if t['criterionId'] not in criteria or not point or t['criterionId'] not in point['criterionIds']:
-            errors.append('Verification target must link an existing point and its primary confirmed criterion')
+            errors.append('Verification target must link an existing point and its primary confirmed criterion: '
+                          +t['id']+' links '+t['pointId']+'/'+t['criterionId']+'; current point criteria='
+                          +','.join(point['criterionIds'] if point else [])
+                          +'. Update the target pointId to an existing relevant concern; do not add unsupported criteria to a match.')
         experience=t['experienceId']
         if experience is None:
             if t['evidence']:errors.append('Unanchored verification target must have empty evidence: '+t['id']+'. Remove borrowed CV premises from singleGoal and keep evidence=[]; ask conditionally whether relevant experience exists. Do not add an unrelated experience anchor just to retain those citations.')
