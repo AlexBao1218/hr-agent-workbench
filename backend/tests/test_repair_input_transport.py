@@ -12,9 +12,7 @@ from test_structured_evidence import case
 def test_repair_changes_sdk_message_then_identical_next_input_stops_without_another_call(setup,case):
     provider,requests,outputs=setup
     document,standards,hat,profile,data=deepcopy(case)
-    data['facts'].append({'id':'research','claim':'研究了优化方法。',
-        'evidence':[{'blockId':'b3','quote':'Researched an optimization method.'}]})
-    data['matches'][0]['factIds'].append('research')
+    data['matches'][0]['componentIds'].append('missing-component')
     outputs.extend([deepcopy(data),deepcopy(data)])
     events=[]
     with pytest.raises(WorkflowError,match='stopped without repeating the same model request') as caught:
@@ -27,8 +25,7 @@ def test_repair_changes_sdk_message_then_identical_next_input_stops_without_anot
     assert repair['repairScope']['mode']=='local_correction'
     assert repair['previousStructuredEvidence']['matches']==data['matches']
     assert len(repair['repairIssues'])==1
-    assert '"pointId": "m1"' in repair['repairIssues'][0]
-    assert '"factIds": ["research"]' in repair['repairIssues'][0]
+    assert repair['repairIssues']==['Match requires existing positive components: m1']
     assert requests[0]['input']!=requests[1]['input']
     stalled=next(e['_diagnostic'] for e in events if e.get('_diagnostic',{}).get('kind')=='repair_stalled')
     assert stalled['providerCalled'] is False and stalled['previousAttempt']==2

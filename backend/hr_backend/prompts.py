@@ -53,8 +53,9 @@ Unanchored checks use existence/null/[]; anchor only to the actual relevant acti
 STRUCTURED_EVIDENCE_RULE = '''PRIVATE PROTOCOL v2: current schema overrides obsolete field names in saved tasks.
 MATCH: facts(id/claim/evidence) are canonical. Components have ONE meaning, exact requirementQuote, state and factIds.
 Observations retain all criterion components and one full-criterion coverage judgment; preserve alternatives/preferences.
-Matches link existing facts/components, plus supplementaryEvidence. One headline owner per fact; limitations belong
-only to positive linked criteria. No separately authored explanation/assessment/summary. Code renders these objects.
+Matches select componentIds plus supplementaryEvidence. Code derives their facts from supported/partial components
+and gives each fact one narrative owner. Do not write point factIds. Limitations belong only to positive linked
+criteria. No separately authored explanation/assessment/summary. Code renders these objects.
 Each focus has ONE componentId/objective; concern and target link ONE focusId. Don't hide compound goals in a label.
 REVIEW evidenceReview CURRENT facts/components/focuses against originals. Supplementary sources are context,
 not asserted facts; judge relevance, never demand all context in prose. Each finding binds actual subjectType/Id,

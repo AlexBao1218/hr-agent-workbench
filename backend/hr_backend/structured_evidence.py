@@ -26,13 +26,13 @@ def _refs(refs):
 def active_structure(data):
     """Project the referenced subgraph; raw model inventory remains in role_output.
 
-    Inventory selection is not an evidence correction. A fact used by a point is
-    retained even if its component association is broken, so that error must be
-    repaired explicitly rather than silently guessed or discarded.
+    Components alone select canonical facts. Deprecated point factIds never
+    create support; raw historical model output remains available for audit.
     """
     result=deepcopy(data)
     focus_ids={c['focusId'] for c in data['concerns']}|{t['focusId'] for t in data['verificationTargets']}
-    fact_ids={i for c in data['components'] for i in c['factIds']}|{i for p in data['matches'] for i in p['factIds']}
+    fact_ids={i for c in data['components'] for i in c['factIds']}
+    for point in result['matches']:point.pop('factIds',None)
     result['facts']=[f for f in result['facts'] if f['id'] in fact_ids]
     result['focuses']=[f for f in result['focuses'] if f['id'] in focus_ids]
     return result
@@ -100,7 +100,6 @@ def validate_structure(data,standards,profile):
         if (o['coverage']=='contradiction')!=('contradiction' in states):
             errors.append('Criterion contradiction must retain its explicit conflicting component: '+o['criterionId'])
     if used_components!=components.keys():errors.append('Every component must remain in its observation, including unselected unknowns')
-    owners={}
     for point in data['matches']:
         # Same existing grounding rule, checked before projection so a broken
         # reference does not conceal an independent metadata error until M2.
@@ -113,20 +112,6 @@ def validate_structure(data,standards,profile):
             errors.append('Match requires existing positive components: '+point['id'])
         if any(c['criterionId'] not in positive for c in point_components):
             errors.append('Match limitations must belong to its positive linked criteria: '+point['id'])
-        if len(point['factIds'])!=len(set(point['factIds'])) or not set(point['factIds'])<=facts.keys():
-            errors.append('Match references missing/duplicate facts: '+point['id'])
-        supported_facts={i for c in point_components if c['coverage'] in ('supported','partial') for i in c['factIds']}
-        if not set(point['factIds'])<=supported_facts:
-            location={'pointId':point['id'],'factIds':sorted(set(point['factIds'])-supported_facts),
-                'componentIds':refs,'positiveComponents':[{'id':c['id'],'criterionId':c['criterionId'],
-                    'factIds':c['factIds']} for c in point_components if c['coverage'] in ('supported','partial')]}
-            errors.append('Match fact needs a link through its own positive component: '+json.dumps(location,ensure_ascii=False)
-                +'. Explicitly correct the fact/component association only if the source supports that requirement component; '
-                'otherwise keep relevant source context as supplementaryEvidence instead of narrating unsupported positive support. '
-                'Do not guess a criterion, add an unrelated component, or change coverage merely to pass.')
-        for i in point['factIds']:
-            if i in owners:errors.append('A headline fact has more than one match owner: '+i)
-            owners[i]=point['id']
     focus_keys=[]
     for focus in focuses.values():
         c=components.get(focus['componentId'])
@@ -154,8 +139,36 @@ def validate_structure(data,standards,profile):
         c=components.get(focuses[i]['componentId'])
         if c and i not in concern_focus:
             matching=[p for p in data['matches'] if c['id'] in p['componentIds'] and c['coverage'] in ('supported','partial')]
-            if len(matching)!=1:errors.append('Unresolved target needs its own concern; supported target needs one matching point: '+i)
+            if not matching:errors.append('Unresolved target needs its own concern; supported target needs a matching point: '+i)
     return list(dict.fromkeys(errors))
+
+
+def _point_layout(data):
+    """Derive support once, narrate each fact once, retain every linked scope.
+
+    A wholly redundant point folds into its first existing fact owner. Other
+    points keep their own new facts and all supporting source references. No
+    source-to-requirement association is inferred here.
+    """
+    components={c['id']:c for c in data['components']}
+    points=[];owners={}
+    for original in data['matches']:
+        point=deepcopy(original)
+        support=list(dict.fromkeys(i for cid in point['componentIds']
+            if components[cid]['coverage'] in ('supported','partial')
+            for i in components[cid]['factIds']))
+        owned=[i for i in support if i not in owners]
+        if not owned:
+            owner=owners[support[0]]
+            owner['componentIds']=list(dict.fromkeys(owner['componentIds']+point['componentIds']))
+            owner['supportFactIds']=list(dict.fromkeys(owner['supportFactIds']+support))
+            owner['supplementaryEvidence']=_refs(owner['supplementaryEvidence']+point['supplementaryEvidence'])
+            continue
+        point['factIds']=owned
+        point['supportFactIds']=support
+        points.append(point)
+        for fact_id in owned:owners[fact_id]=point
+    return points
 
 
 def project_match(data,standards,profile):
@@ -175,13 +188,14 @@ def project_match(data,standards,profile):
         analysis['observations'].append({'criterionId':o['criterionId'],'coverage':o['coverage'],
             'explanation':''.join(facts[i]['claim'].rstrip('。')+'。' for i in asserted)+''.join(component_text(c) for c in scopes),
             'evidence':fact_refs(ids)})
-    for p in data['matches']:
+    points=_point_layout(data)
+    for p in points:
         scopes=[components[i] for i in p['componentIds']]
         linked=list(dict.fromkeys(c['criterionId'] for c in scopes if c['coverage'] in ('supported','partial')))
         assessment=''.join(component_text(c) for c in scopes)
         claims=[{'claim':facts[i]['claim'],'evidence':deepcopy(facts[i]['evidence'])} for i in p['factIds']]
         analysis['matches'].append({'id':p['id'],'title':p['title'],'criterionIds':linked,'jdRequirement':requirement(linked),
-            'explanation':'','evidence':_refs(fact_refs(p['factIds'])+p['supplementaryEvidence']),'kind':'match'})
+            'explanation':'','evidence':_refs(fact_refs(p['supportFactIds'])+p['supplementaryEvidence']),'kind':'match'})
         grounding.append({'pointId':p['id'],'focus':p['focus'],'capabilities':p['capabilities'],
             'scopeReason':p['scopeReason'],'claims':claims,'assessment':assessment})
     concern_by_focus={c['focusId']:c['id'] for c in data['concerns']}
@@ -195,7 +209,7 @@ def project_match(data,standards,profile):
     for t in data['verificationTargets']:
         f=focuses[t['focusId']];c=components[f['componentId']]
         point_id=concern_by_focus.get(f['id'])
-        if point_id is None:point_id=next(p['id'] for p in data['matches'] if c['id'] in p['componentIds'])
+        if point_id is None:point_id=next(p['id'] for p in points if c['id'] in p['componentIds'])
         targets.append({'id':t['id'],'pointId':point_id,'criterionId':c['criterionId'],
             'singleGoal':focus_goal(f,c),'decisionReason':t['decisionReason'],
             'experienceId':f['experienceId'],'evidence':deepcopy(f['evidence'])})
@@ -208,9 +222,10 @@ def review_projection(data,analysis):
     """No separately rewritten body is supplied as another source of facts."""
     data=active_structure(data)
     facts={f['id']:f for f in data['facts']}
+    points=_point_layout(data)
     supplementary=[]
     for p in analysis['matches']:
-        point=next(row for row in data['matches'] if row['id']==p['id'])
+        point=next(row for row in points if row['id']==p['id'])
         stated={(r['blockId'],normalize_evidence(r['quote'])) for i in point['factIds'] for r in facts[i]['evidence']}
         for r in p['evidence']:
             if (r['blockId'],normalize_evidence(r['quote'])) in stated:continue
@@ -218,7 +233,7 @@ def review_projection(data,analysis):
             supplementary.append({'id':'context-'+digest,'pointId':p['id'],**deepcopy(r)})
     result={'evidenceProtocol':2,'facts':deepcopy(data['facts']),'components':deepcopy(data['components']),
         'observations':deepcopy(data['observations']),
-        'points':[{k:deepcopy(v) for k,v in p.items() if k!='supplementaryEvidence'} for p in data['matches']],
+        'points':[{k:deepcopy(v) for k,v in p.items() if k!='supplementaryEvidence'} for p in points],
         'focuses':deepcopy(data['focuses']),'concerns':deepcopy(data['concerns']),
         'verificationTargets':deepcopy(data['verificationTargets']),
         'supplementarySources':[{'id':r['id'],'pointId':r['pointId'],'blockId':r['blockId']} for r in supplementary]}

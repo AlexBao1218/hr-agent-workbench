@@ -32,9 +32,9 @@ def case():
           'observations':[{'criterionId':'duty','coverage':'partial','componentIds':['flow','hr']},
                           {'criterionId':'improve','coverage':'partial','componentIds':['test','privacy']},
                           {'criterionId':'prior','coverage':'unknown','componentIds':['history']}],
-          'matches':[{'id':'m1','title':'流程原型','factIds':['f1'],'componentIds':['flow','hr'],
+          'matches':[{'id':'m1','title':'流程原型','componentIds':['flow','hr'],
                       'focus':'workflow','capabilities':[],'scopeReason':'Workflow prototype only','supplementaryEvidence':[refs[2]]},
-                     {'id':'m2','title':'检索测试','factIds':['f2'],'componentIds':['test','privacy'],
+                     {'id':'m2','title':'检索测试','componentIds':['test','privacy'],
                       'focus':'workflow','capabilities':[],'scopeReason':'Retrieval tests only','supplementaryEvidence':[]}],
           'focuses':[{'id':fid,'componentId':cid,'label':label,'objective':'existence','experienceId':None,'evidence':[]}
                      for fid,cid,label in [('goalHR','hr','HR系统集成'),('goalPrivacy','privacy','隐私处理'),('goalPrior','history','HR助手实操')]],
@@ -133,7 +133,6 @@ def test_unknown_context_refs_are_retained_without_becoming_a_positive_narrative
     assert unknown['coverage']=='unknown'
     assert '构建了库存流程原型' not in unknown['explanation']
     assert unknown['evidence']==changed[4]['facts'][0]['evidence']
-    changed[4]['matches'][1]['factIds'].append('f1')
     changed[4]['matches'][1]['componentIds'].append('history')
     assert project_match(changed[4],changed[1],changed[3])[-1]
 
@@ -228,33 +227,68 @@ def test_unused_inventory_does_not_block_or_leak_into_public_or_review_projectio
     assert provider.roles==['match']  # Exact source checks still block actually used invalid inventory.
 
 
-def test_bad_point_association_is_specific_and_does_not_report_empty_placeholder_errors(case):
+def test_bad_component_selection_does_not_report_empty_placeholder_errors(case):
     document,standards,hat,profile,data=deepcopy(case)
-    data['facts'].append({'id':'fact-research','claim':'研究了优化方法。',
-        'evidence':[{'blockId':'b3','quote':'Researched an optimization method.'}]})
-    data['matches'][0]['factIds'].append('fact-research')
+    data['matches'][0]['componentIds'].append('missing-component')
     events=[];provider=StructuredStub(data)
     with pytest.raises(WorkflowError,match='Deterministic validation did not pass'):
         Workflow(provider,max_repairs=0).analyze(document,standards,hat,'run','candidate',profile=profile,trace_callback=events.append)
     diagnostic=next(e['_diagnostic'] for e in events if e.get('_diagnostic',{}).get('kind')=='match_validation')
-    assert diagnostic['projectionBlocked'] and len(diagnostic['validationIssues'])==1
-    issue=diagnostic['validationIssues'][0]
-    assert '"pointId": "m1"' in issue and '"factIds": ["fact-research"]' in issue
-    assert '"componentIds": ["flow", "hr"]' in issue and '"positiveComponents"' in issue
-    assert 'Observations must cover' not in issue and 'three reviewed single-purpose' not in issue
-    assert data['components'][0]['factIds']==['f1']  # No automatic association guessing.
+    assert diagnostic['projectionBlocked'] and diagnostic['validationIssues']==['Match requires existing positive components: m1']
+    assert data['components'][0]['factIds']==['f1']
 
 
 def test_preexisting_scope_metadata_error_is_visible_in_the_same_structural_pass(case):
     document,standards,hat,profile,data=deepcopy(case)
-    data['matches'][1]['focus']='capability'  # Existing rule requires one controlled capability.
-    data['facts'].append({'id':'research','claim':'研究了优化方法。',
-        'evidence':[{'blockId':'b3','quote':'Researched an optimization method.'}]})
-    data['matches'][0]['factIds'].append('research')
+    data['matches'][1]['focus']='capability'
+    data['matches'][0]['componentIds'].append('missing-component')
     errors=project_match(data,standards,profile)[-1]
     assert len(errors)==2
-    assert any('"pointId": "m1"' in e for e in errors)
+    assert 'Match requires existing positive components: m1' in errors
     assert any('"id": "m2"' in e and 'focus/capabilities mismatch' in e for e in errors)
+
+
+def test_live_point_schema_derives_facts_and_ignores_legacy_selection(case):
+    assert 'factIds' not in StructuredMatchResult.model_json_schema()['$defs']['GroundedPoint']['properties']
+    original=deepcopy(case[4])
+    original['matches'][0]['factIds']=['f2','missing-fact']
+    decoded=StructuredMatchResult.model_validate(original).model_dump()
+    assert 'factIds' not in decoded['matches'][0]
+    analysis,grounding,_,errors=project_match(original,case[1],case[3])
+    assert not errors
+    assert grounding[0]['claims']==[{'claim':case[4]['facts'][0]['claim'],'evidence':case[4]['facts'][0]['evidence']}]
+    assert not any(r['blockId']=='b2' for r in analysis['matches'][0]['evidence'])
+    assert original['matches'][0]['factIds']==['f2','missing-fact']
+
+
+def test_shared_fact_supports_multiple_criteria_without_repeated_prose(case):
+    changed=deepcopy(case)
+    changed[4]['components'][2]['factIds']=['f1','f2']
+    analysis,grounding,_=render(changed)
+    claim=changed[4]['facts'][0]['claim']
+    assert sum(p['explanation'].count(claim) for p in analysis['matches'])==1
+    assert all(claim in p['explanation'] for p in analysis['observations'][:2])
+    assert [p['criterionIds'] for p in analysis['matches']]==[['duty'],['improve']]
+    assert any(r['blockId']=='b1' for r in analysis['matches'][1]['evidence'])
+    projection,context=review_projection(changed[4],analysis)
+    assert projection['points'][1]['factIds']==['f2']
+    assert projection['points'][1]['supportFactIds']==['f1','f2']
+    assert any(r['pointId']=='m2' and r['blockId']=='b1' for r in context)
+
+
+def test_fully_redundant_point_merges_scopes_sources_and_target_links(case):
+    changed=deepcopy(case)
+    data=changed[4]
+    data['components'][2]['factIds']=['f1']
+    data['focuses'][1].update(componentId='test',label='检索验证')
+    data['concerns']=[c for c in data['concerns'] if c['focusId']!='goalPrivacy']
+    analysis,grounding,targets=render(changed)
+    assert len(analysis['matches'])==len(grounding)==1
+    assert analysis['matches'][0]['criterionIds']==['duty','improve']
+    assert targets[1]['pointId']=='m1' and targets[1]['criterionId']=='improve'
+    assert len(grounding[0]['claims'])==1
+    assert '数据隐私要求' in analysis['matches'][0]['explanation']
+    assert not validate_review({'approved':True,'findings':[]},data,analysis,changed[1])
 
 
 def test_real_api_store_with_structured_stub_persists_public_result_and_restart_readback(case,tmp_path):

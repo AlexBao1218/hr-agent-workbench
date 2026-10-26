@@ -131,12 +131,18 @@ class CriterionComponents(Strict):
 class GroundedPoint(Strict):
     id: str
     title: str = Field(min_length=1, max_length=32)
-    factIds: list[str] = Field(min_length=1)
     componentIds: list[str] = Field(min_length=1, description='Positive supported/partial component(s) and same-criterion limitations only. Do not attach a different criterion merely to narrate its unknowns.')
     focus: Literal['capability','workflow','other','uncertain']
     capabilities: list[Literal['rag','python','data_analysis']] = Field(max_length=1)
     scopeReason: str = Field(min_length=1)
     supplementaryEvidence: list[EvidenceRef] = Field(description='Relevant clickable context, not asserted facts and not required in the narrative. Never use context alone to invent an achievement.')
+
+    @model_validator(mode='before')
+    @classmethod
+    def discard_legacy_fact_selection(cls, value):
+        # Old fixtures/history remain decodable; components are the sole authority.
+        if isinstance(value,dict):return {k:v for k,v in value.items() if k!='factIds'}
+        return value
 
 class VerificationFocus(Strict):
     id: str
