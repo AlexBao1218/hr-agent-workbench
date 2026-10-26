@@ -320,8 +320,8 @@ def validate_rows(data,standards,profile):
             errors.append('Candidate evidence needs a nonempty fact: '+cid)
         if row['coverage'] in ('supported','partial') and not any(s in ('supported','partial') for s in states):
             errors.append('Positive row requires source-backed support: '+cid)
-        if row['coverage']=='unknown' and states:
-            errors.append('Unknown row cannot also assert support/conflict; keep context in its unresolved item: '+cid)
+        if row['coverage']=='unknown' and 'contradiction' in states:
+            errors.append('Unknown row cannot also assert an explicit conflicting source: '+cid)
         if row['coverage']=='contradiction' and 'contradiction' not in states:
             errors.append('Contradiction row requires an explicit conflicting source: '+cid)
         # Alternatives may be overall supported with unknown/contradicted alternatives.
@@ -359,8 +359,9 @@ def project_rows(data,standards,profile):
     for row in rows:
         cid=row['criterionId'];criterion=criteria[cid]
         facts=row['evidence']
-        lines=[f['claim'].rstrip('。')+'。'+{'supported':'相关证据支持该标准片段。','partial':'相关证据仅部分支持该标准片段。',
-               'contradiction':'相关原文与该标准片段明确冲突。'}[f['state']]+'「'+f['requirementQuote']+'」' for f in facts]
+        lines=[f['claim'].rstrip('。')+'。'+('该项仍未知；保留相关事实不表示满足标准片段。' if row['coverage']=='unknown' else
+               {'supported':'相关证据支持该标准片段。','partial':'相关证据仅部分支持该标准片段。',
+                'contradiction':'相关原文与该标准片段明确冲突。'}[f['state']])+'「'+f['requirementQuote']+'」' for f in facts]
         lines += ['待确认：'+g['singleGoal'] for g in row['unknowns']]
         if not lines:lines=['材料未提供该项标准的可用证据，待确认。']
         result['observations'].append({'criterionId':cid,'coverage':row['coverage'],

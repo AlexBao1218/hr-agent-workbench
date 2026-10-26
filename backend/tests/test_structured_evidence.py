@@ -471,14 +471,16 @@ def test_rows_overall_or_bonus_and_all_unknowns_preserved(row_case):
     assert data['rows'][0]['coverage']=='partial'
 
 
-@pytest.mark.parametrize('change',['false_quote','wrong_owner','wrong_requirement','missing_criterion','false_conflict','unknown_positive'])
+@pytest.mark.parametrize('change',['false_quote','wrong_owner','wrong_requirement','missing_criterion','false_conflict','unknown_conflict'])
 def test_rows_fail_closed_on_source_scope_and_coverage_structure(row_case,change):
     doc,standards,hat,profile,data=deepcopy(row_case)
     if change=='false_quote':data['rows'][0]['evidence'][0]['evidence'][0]['quote']='Fabricated source.'
     elif change=='wrong_requirement':data['rows'][0]['evidence'][0]['requirementQuote']=standards['criteria'][1]['description']
     elif change=='missing_criterion':data['rows'].pop()
     elif change=='false_conflict':data['rows'][-1]['coverage']='contradiction'
-    elif change=='unknown_positive':data['rows'][0]['coverage']='unknown'
+    elif change=='unknown_conflict':
+        data['rows'][0]['coverage']='unknown'
+        data['rows'][0]['evidence'][0]['state']='contradiction'
     else:
         doc['blocks']=[{'id':'h1','text':'First Employer'},{'id':'b1','text':'Built a workflow prototype for inventory.'},
                        {'id':'h2','text':'Second Employer'},{'id':'b2','text':'Tuned and tested retrieval.'},doc['blocks'][2]]
@@ -613,3 +615,55 @@ def test_row_only_narrated_facts_get_owner_so_later_criterion_can_display_remain
     assert {r['blockId'] for r in analysis['matches'][0]['evidence']}=={'b1','b2'}
     assert second in analysis['matches'][1]['explanation']
     assert len(analysis['matches'][0]['explanation'])<=360
+
+
+def test_unknown_row_keeps_sourced_facts_without_positive_points_or_score(row_case):
+    from hr_backend.policy import rank
+    changed=deepcopy(row_case);data=changed[4];data['rows'][0]['coverage']='unknown'
+    baseline=[{'criterionId':r['criterionId'],'coverage':r['coverage']} for r in data['rows']]
+    analysis,grounding,_,_=row_render(changed)
+    row=next(o for o in analysis['observations'] if o['criterionId']=='duty')
+    assert row['coverage']=='unknown' and row['evidence']==data['rows'][0]['evidence'][0]['evidence']
+    assert data['rows'][0]['evidence'][0]['claim'] in row['explanation']
+    assert '保留相关事实不表示满足标准片段' in row['explanation']
+    assert not any('duty' in p['criterionIds'] for p in analysis['matches'])
+    assert rank(changed[1]['criteria'],analysis['observations'])==rank(changed[1]['criteria'],baseline)
+    provider=RowStub(data)
+    assert Workflow(provider,max_repairs=0).analyze(*changed[:3],'r','c',profile=changed[3])['reviewed']
+    assert provider.roles==['match','review','interview']
+
+
+def test_false_hr_support_still_fails_independent_review_after_unknown_gate_relaxed(row_case):
+    doc,standards,hat,profile,data=deepcopy(row_case)
+    # A literal source quote exists, but the candidate claim/domain assertion is false.
+    prior=data['rows'][-1];prior['coverage']='partial'
+    prior['evidence']=[{'requirementQuote':'构建HR助手的实操经验','state':'partial',
+        'claim':'构建了HR助手。','evidence':[{'blockId':'b1','quote':'Built a workflow prototype for inventory.'}]}]
+    review={'approved':False,'findings':[{'criterionId':'prior','section':'evidence','index':0,
+        'statement':prior['evidence'][0]['claim'],'requirementQuote':'构建HR助手的实操经验',
+        'evidence':prior['evidence'][0]['evidence'],'severity':'blocker',
+        'message':'库存流程原型不证明HR助手经历，不能用于该既有HR资格的partial支持。'}]}
+    class RejectHR(RowStub):
+        def generate(self,role,payload,schema):
+            if role=='review':self.roles.append(role);return review
+            return super().generate(role,payload,schema)
+    provider=RejectHR(data);events=[]
+    with pytest.raises(WorkflowError,match='Evidence review did not pass'):
+        Workflow(provider,max_repairs=0).analyze(doc,standards,hat,'r','c',profile=profile,trace_callback=events.append)
+    assert provider.roles==['match','review']
+    decision=next(e['_diagnostic'] for e in events if e.get('_diagnostic',{}).get('kind')=='review_decision')
+    assert not decision['publishable'] and decision['findings']==review['findings']
+
+
+def test_unknown_default_task_revision_is_explicit_and_does_not_mutate_saved_tasks():
+    from hr_backend.prompts import PREVIOUS_ROW_TASKS,ROLE_INSTRUCTIONS,UNKNOWN_ROW_TASK_RULE
+    config={'roles':{r:{'systemPrompt':text} for r,text in PREVIOUS_ROW_TASKS.items()}}
+    original=deepcopy(config);proposal=row_template_migration(config)
+    assert config==original and proposal['automaticMigration'] is False
+    for role in ('match','review'):
+        assert proposal['roles'][role]['status']=='known_previous_default'
+        assert ROLE_INSTRUCTIONS[role]==PREVIOUS_ROW_TASKS[role]+UNKNOWN_ROW_TASK_RULE
+        assert 'never 非HR' in ROLE_INSTRUCTIONS[role]
+        assert 'does not mean the whole' in ROLE_INSTRUCTIONS[role]
+    config['roles']['match']['systemPrompt']+=' Custom user rule'
+    assert row_template_migration(config)['roles']['match']['status']=='custom_requires_review'

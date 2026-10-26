@@ -218,6 +218,17 @@ Return approved=false only with a concrete current blocker; warnings/cosmetic ch
 """
 
 
+# Default-task revision only. Existing saved tasks still require explicit CAS migration.
+PREVIOUS_ROW_TASKS = {role:ROLE_INSTRUCTIONS[role] for role in ('match','review')}
+UNKNOWN_ROW_TASK_RULE = """
+Overall unknown may retain exact-source related/partial facts; retaining them does not mean the whole
+criterion or any subrequirement is satisfied. Review actual applicability separately, especially prior-domain evidence.
+An unmentioned HR domain must be phrased 未说明HR场景, never 非HR. Each singleGoal asks one missing answer only;
+split independent objectives instead of bundling them.
+"""
+for _role in ('match','review'):ROLE_INSTRUCTIONS[_role] += UNKNOWN_ROW_TASK_RULE
+
+
 def row_template_migration(config):
     """Read-only migration proposal; applying it requires explicit CAS settings activation."""
     import difflib
@@ -225,7 +236,7 @@ def row_template_migration(config):
     result={'targetVersion':ROW_TEMPLATE_VERSION,'automaticMigration':False,'roles':{}}
     for role in ('match','review'):
         current=config['roles'][role]['systemPrompt'];target=ROLE_INSTRUCTIONS[role]
-        status='current' if current==target else 'known_previous_default' if current==LEGACY_ROW_TASKS[role] else 'custom_requires_review'
+        status='current' if current==target else 'known_previous_default' if current in (LEGACY_ROW_TASKS[role],PREVIOUS_ROW_TASKS[role]) else 'custom_requires_review'
         result['roles'][role]={'status':status,'currentSha256':hashlib.sha256(current.encode()).hexdigest(),
             'targetSha256':hashlib.sha256(target.encode()).hexdigest(),
             'condition':'Root reviews this exact diff, preserves custom instructions explicitly, then CAS-saves and activates a new version. No automatic replacement.',
