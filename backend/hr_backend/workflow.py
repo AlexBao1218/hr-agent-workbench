@@ -101,9 +101,10 @@ def validate_presentation(analysis):
     """Live display limits preserve complete observations; violations go through repair."""
     errors=[]
     if len(analysis.get('matches',[]))>6: errors.append('Visible matches must contain at most 6 focused capabilities')
-    if len(analysis.get('concerns',[]))>4: errors.append('Select about 3 material concerns, at most 4')
+    if not analysis.get('_readingVersion') and len(analysis.get('concerns',[]))>4: errors.append('Select about 3 material concerns, at most 4')
     for point in analysis.get('matches',[])+analysis.get('concerns',[]):
-        for field,limit in [('title',32),('explanation',600 if analysis.get('_readingVersion') else 360)]:
+        body_limit=(6000 if point in analysis.get('concerns',[]) else 600) if analysis.get('_readingVersion') else 360
+        for field,limit in [('title',32),('explanation',body_limit)]:
             if len(point[field].strip())>limit:
                 errors.append(f'Visible point {field} exceeds {limit} characters; summarize without losing source scope')
     return errors
@@ -394,9 +395,10 @@ class Workflow:
         attempt=state.get('attempt',0)+1
         current=row_payload(document,standards,hat,context,feedback,state['profile'])
         issues=list(dict.fromkeys(state.get('semanticErrors',[])+state.get('errors',[])))
-        if attempt>1:
+        if attempt>1 or (state.get('structuredEvidence') and issues):
             current['previousRows']=deepcopy(state.get('structuredEvidence',{}))
             current['repairIssues']=issues
+            if state.get('repairSource'):current['repairSource']=deepcopy(state['repairSource'])
             current['repairInstruction']='Patch the supplied previousRows at these exact current defects; preserve valid facts/quotes and unrelated rows. Before returning, verify every listed defect is actually eliminated. Return the full corrected object, not an unchanged copy.'
         input_hash=hashlib.sha256(json.dumps(current,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         if state.get('matchInputHash')==input_hash:

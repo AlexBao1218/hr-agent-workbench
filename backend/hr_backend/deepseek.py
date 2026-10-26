@@ -155,6 +155,8 @@ class DeepSeekProvider(OpenAIProvider):
             kind='http_status' if isinstance(exc,APIStatusError) else 'timeout' if isinstance(exc,APITimeoutError) else 'connection' if isinstance(exc,APIConnectionError) else 'sdk_or_structure'
             code=getattr(exc,'status_code',None)
             diagnostic={'responseStatus':'failed','failureKind':kind,'httpStatus':code if type(code) is int and 100<=code<=599 else None}
+            if kind=='http_status' and code==402:
+                raise ProviderError('model_balance_exhausted','DeepSeek API 余额不足（HTTP 402）。请补充当前 API 密钥所属账户的余额后手动重试；本次未生成可发布结果，也不会自动重试。',response_diagnostic=diagnostic) from None
             raise ProviderError('model_failed','DeepSeek request failed; check server configuration, API access and connectivity. No automatic retry.',response_diagnostic=diagnostic) from None
         finally:
             self._record(call_id,status,usage)

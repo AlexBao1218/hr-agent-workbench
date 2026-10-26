@@ -359,7 +359,7 @@ def validate_capability_coverage(analysis,index,exclusions=(),grounding=None):
 
 ANGLE_LABELS={'contribution':'个人贡献','validation':'验证方法','limitations':'失败与边界'}
 ANGLE_PATTERNS={
- 'contribution':r'亲自|个人|负责|贡献|产物|实现部分|personally|contribut|responsib|your own|which part',
+ 'contribution':r'亲自|本人|个人|负责|贡献|产物|实现部分|personally|contribut|responsib|your own|which part',
  'validation':r'验证|评估|核验|测试|指标|对照|validat|evaluat|test|metric|measur',
  'limitations':r'失败|边界|限制|不足|未达|未成功|failure|failed|limit|boundar|unsuccess|did not',
 }
@@ -436,7 +436,9 @@ def interview_plan(analysis,standards,profile,targets=None):
              'criterionDescription':criteria[t['criterionId']]['description'],'primaryGoal':t['singleGoal'],
              'decisionReason':t['decisionReason'],'verificationAngle':t.get('objective') if t.get('objective') in ANGLE_PATTERNS else 'primary','singleObjective':t.get('objective'),'unresolvedPoint':points[t['pointId']]['title'],
              'questionMode':'source_anchored' if t['experienceId'] else 'unanchored',
-             'sourceBoundary':'Use only assigned evidence; one missing answer, not the whole criterion.',
+             'sourceBoundary':'Use only assigned evidence; one missing answer, not the whole criterion. assessmentScope limits the premise: ask whether an unproven outcome occurred, never presume it was achieved.',
+             'assessmentScope':{'point':points[t['pointId']].get('explanation',''),
+                 'criterion':next((o['explanation'] for o in analysis.get('observations',[]) if o['criterionId']==t['criterionId']),None)},
              'experience':{k:experiences[t['experienceId']][k] for k in ('id','organization','kind')} if t['experienceId'] else None,
              'allowedEvidence':deepcopy(t['evidence'])} for i,t in enumerate(targets)]
 

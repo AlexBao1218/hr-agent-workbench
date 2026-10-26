@@ -309,6 +309,12 @@ question but NEVER adds coverage. For evidence, supply one singleGoal and verifi
 reuse its row values with singleGoal/conclusion=null. Set objective=existence/contribution/method/validation/limitations;
 unanchored unknown choices use existence. Keep each goal/question on ONE dimension, not contribution plus validation.
 Explain why each answer matters under confirmed priorities. Do not ask facts already answered or invent HR work.
+Anchor a goal only in the stated activity. Development does not establish deployment; finding a problem does not
+establish fixing it. Never phrase an unproven result as already achieved. If an outcome matters but is unknown,
+ask WHETHER it occurred, then allow the candidate to describe what happened, including no deployment/no resolution.
+Every factual premise in singleGoal must be supported by THAT selected item's references, not a different CV passage.
+Choose one concrete decision, contribution or example the interviewer can follow; do not require a tour of every
+algorithm/tool/module listed in the CV. The answer must help judge the selected requirement, not test trivia.
 Review every row AND this recipe: conclusions/summary/interviewSelection pass|block. Check actual current facts,
 qualifiers, source ownership, useful non-repeated goals and hidden important uncertainty. No question slot quota
 changes coverage. Unselected unknowns remain in observations. Actual substantive defects block; style does not.
@@ -318,6 +324,8 @@ assert an unsupported negative. Block only a false assertion actually present, w
 
 CANDIDATE_ROW_RULES = """
 Rows retain EVERY confirmed criterion, its exact requirement substrings, evidence judgments and ALL genuine unknowns.
+Check EVERY compoundRequirementClauses action separately; do not hide missing actions in broad gaps.
+Employer labels must use exact source/profile names or aliases, never translations.
 Whole coverage preserves AND/OR/preferences; partial supports a real constituent, not every subpart or a full HR domain.
 If evidence states are all context, row coverage MUST be unknown, not partial. Context is factual background with ZERO support.
 Match action AND object: a generic analytical framework is NOT an LLM/agent framework. Generic product planning
@@ -361,6 +369,13 @@ For unanchored questions, conditionally ask the approved missing answer; do not 
 Follow singleObjective: method/contribution questions must not append validation/results checks.
 The same important gap may recur across candidates, but never make all three questions generic HR-experience checks
 when the plan supplies actual candidate activities. Return actual generated questions, never canned templates.
+premise-safe-interview-v1: assessmentScope is an explicit limit on the assigned source premise, not an achievement.
+Never add an achieved outcome to the reviewed goal: developed is not deployed; identified is not resolved;
+proposed is not implemented; supported/team participation is not independent ownership. Missing results stay open.
+When the source/assessment leaves an outcome unknown, ask whether it happened, not how the candidate completed it.
+For method/contribution, ask for ONE concrete step or decision from the assigned activity. A source's list of
+algorithms or tools is context, not a requirement to explain all of them. A same-goal example may clarify the answer.
+purpose must say what HR can judge from the answer under the linked requirement, not introduce another test.
 """
 
 def row_template_migration(config):

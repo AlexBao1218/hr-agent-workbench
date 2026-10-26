@@ -434,7 +434,9 @@ def test_rows_program_titles_priority_single_goals_and_public_shape(row_case):
     assert [p['title'] for p in result['matches']]==[c['title'] for c in standards['criteria'][:2]]
     assert set(result)=={'profile','observations','matches','concerns','summary','keyUnknown','questions','reviewed'}
     initial=provider.match_payloads[0]
-    assert not set(initial)&{'profile','capabilityEvidenceIndex','sourceOwnershipContext','confirmedRequirementScope','repairScope','repairIssues','previousRows','previousStructuredEvidence'}
+    assert not set(initial)&{'profile','capabilityEvidenceIndex','sourceOwnershipContext','repairScope','repairIssues','previousRows','previousStructuredEvidence'}
+    assert [(scope['criterionId'],scope['requirement']) for scope in initial['confirmedRequirementScope']]==[(c['id'],c['description']) for c in standards['criteria']]
+    assert all('jdQuote is source context' in scope['authority'] for scope in initial['confirmedRequirementScope'])
     assert initial['document']['blocks']==[{'id':b['id'],'text':b['text']} for b in doc['blocks']]
     assert 'jdText' not in initial['standards']
     assert initial['context']=={'runId':'r','candidateId':'c','standardsVersion':'s1','hatVersion':'h1'}

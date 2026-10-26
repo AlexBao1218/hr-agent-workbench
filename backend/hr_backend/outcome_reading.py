@@ -79,11 +79,11 @@ def project_reading(data,analysis,grounding,standards,profile):
         else:
             goal=choice.get('singleGoal');title=choice.get('conclusion');eid=_anchor(item,owners);refs=item['evidence']
             if item['state']=='contradiction' or not eid:
-                errors.append('Evidence interview choices need a source-backed activity with one exact owner. Context may anchor a question but never becomes positive coverage.')
+                errors.append('reading.interviewChoices/'+str(slot)+' selects '+cid+'/evidence/'+str(choice['index'])+' without one exact source owner. Split a multi-employer evidence item into separate source-owned facts, or select another single-owner item; do not keep reselecting the same mixed item. Context can anchor a question but never becomes positive coverage.')
             key=fact_key(item)
             if key in chosen_facts:errors.append('Choose different evidenced activities instead of selecting the same fact twice under different goals.')
             chosen_facts.add(key)
-            if not goal or not title:errors.append('Evidence interview choices need one missing answer and its short verification conclusion.')
+            if not goal or not title:errors.append('reading.interviewChoices/'+str(slot)+' has section=evidence: supply non-null singleGoal (one source-specific missing answer) and conclusion (its short verification title), rather than the null fields used by section=unknown.')
         if not goal or not title:continue
         errors+=objective_errors(goal,objective)
         if not eid and objective!='existence':errors.append('Unanchored choices must conditionally verify existence, not assume prior work.')
@@ -97,15 +97,37 @@ def project_reading(data,analysis,grounding,standards,profile):
         errors.append('Select '+str(required)+' source-specific goals about different real activities instead of three generic JD existence checks. Context may supply a real activity for a question without supporting a qualification. Preserve actual owners and sources; never invent HR work.')
     if len(choices)!=3:errors.append('Provide exactly three valid candidate-specific interview choices.')
     if errors:return analysis,grounding,[],selected,list(dict.fromkeys(errors))
-    concerns={};targets=[]
+    concerns={};targets=[];concern_goals={};context_attached=set()
+    def attach_context(point,cid):
+        if cid in context_attached:return
+        facts=[fact for fact in rows[cid]['evidence'] if fact['state']=='context']
+        if facts:
+            basis='\n'.join('相关经历：'+fact['claim'].rstrip('。')+'。支持范围：'+fact['scope'].rstrip('。')+'。' for fact in facts)
+            point['explanation']=basis+'\n'+point['explanation']
+            for fact in facts:
+                for ref in fact['evidence']:
+                    if ref not in point['evidence']:point['evidence'].append(deepcopy(ref))
+            context_attached.add(cid)
     def concern(cid,index):
         key=(cid,index)
         if key not in concerns:
             row=rows[cid];unknown=row['unknowns'][index]
+            same=concern_goals.get(_key(unknown['singleGoal']))
+            if same is not None:
+                if cid not in same['criterionIds']:
+                    same['criterionIds'].append(cid)
+                    same['jdRequirement']='；'.join(criteria[c]['description'] for c in same['criterionIds'])
+                for ref in unknown['evidence']:
+                    if ref not in same['evidence']:same['evidence'].append(deepcopy(ref))
+                concerns[key]=same
+                attach_context(same,cid)
+                return same
             concerns[key]={'id':'unknown-'+cid+'-'+str(index),'title':unknown['conclusion'],
                 'criterionIds':[cid],'jdRequirement':criteria[cid]['description'],
                 'explanation':'待确认：'+unknown['singleGoal'],'evidence':deepcopy(unknown['evidence']),
                 'kind':'verify'}
+            concern_goals[_key(unknown['singleGoal'])]=concerns[key]
+            attach_context(concerns[key],cid)
         return concerns[key]
     if reading.get('gapSource'):
         reference=reading['gapSource'];concern(reference['criterionId'],reference['index'])
@@ -124,10 +146,11 @@ def project_reading(data,analysis,grounding,standards,profile):
             'singleGoal':goal,'decisionReason':choice['decisionReason'],'experienceId':eid,'evidence':deepcopy(refs),'objective':choice['objective']})
     ordered=sorted(data['rows'],key=lambda r:(criteria[r['criterionId']]['group']!='must',criteria[r['criterionId']]['priority']))
     for row in ordered:
-        if len(concerns)>=4:break
-        if row['coverage']!='supported' and row['unknowns']:
-            concern(row['criterionId'],0)
-    analysis['concerns']=list(concerns.values())[:4]
+        if row['coverage']!='supported':
+            for index in range(len(row['unknowns'])):concern(row['criterionId'],index)
+    # The card stays concise. The detail tab retains every distinct reviewed
+    # missing answer, including logistics; only exactly identical goals merge.
+    analysis['concerns']=list({p['id']:p for p in concerns.values()}.values())
     analysis['summary']=summary;analysis['_readingVersion']=READING_VERSION
     analysis=reading_order(analysis,standards)
     analysis['keyUnknown']=gap

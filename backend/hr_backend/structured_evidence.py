@@ -7,6 +7,7 @@ identities, references and projection boundaries. Legacy saved data is untouched
 from copy import deepcopy
 import hashlib
 import json
+import re
 
 from .evidence import normalize_evidence, reading_order
 
@@ -305,7 +306,11 @@ def row_payload(document,standards,hat,context,feedback,profile):
                         'availability':{'value':profile['availability'],'sourceBlockIds':source_ids(profile['availability'])}}
     return {'document':{'id':document['id'],'blocks':[{'id':b['id'],'text':b['text']} for b in document['blocks']]},
             'standards':{'version':deepcopy(standards['version']),'criteria':deepcopy(standards['criteria'])},
+            'confirmedRequirementScope':[{'criterionId':c['id'],'requirement':c['description'],'authority':'Only this HR-confirmed description defines this criterion. jdQuote is source context, not additional duties or bonus conditions.'} for c in standards['criteria']],
             'hat':deepcopy(hat),'context':deepcopy(context),'feedback':deepcopy(feedback),
+            # HR's confirmed description defines scope. A broader JD quote can
+            # contain a separate bonus criterion and must not expand this row.
+            'compoundRequirementClauses':[{'criterionId':c['id'],'basis':'confirmed_description','clauses':[part.strip() for part in re.split(r'[;；，]',c['description']) if part.strip()]} for c in standards['criteria'] if re.search(r'[;；，]',c['description'])],
             'profileNavigation':profile_navigation,
             'experiences':[{k:e[k] for k in ('id','organization','kind')} for e in profile['experiences']],
             'sourceOwnership':{'groups':ownership,'policy':navigation['policy']}}
@@ -466,6 +471,26 @@ def row_claim_grounding(data):
     return [{'pointId':r['criterionId'],'claims':r['evidence']} for r in data['rows']]
 
 
+def _current_unknown_list(statement,row,cid):
+    """A missing subclause concerns the complete current list, not a nonexistent item.
+
+    Accept only exact, ordered current titles/goals with a literal list wrapper;
+    arbitrary prose, stale entries and incomplete lists remain invalid.
+    """
+    import re
+    text=statement.strip()
+    for prefix in (cid+' unknowns:',cid+' unknowns：','unknowns:','unknowns：'):
+        if text.startswith(prefix):text=text[len(prefix):].strip();break
+    pattern=r'''(['"])(.*?)\1'''
+    pieces=[match[1] for match in re.findall(pattern,text)]
+    if re.sub(pattern,'',text).strip(' ,;，；、[]\n\r\t'):return False
+    actual=[normalize_evidence(value) for value in pieces]
+    for field in ('singleGoal','conclusion'):
+        expected=[item.get(field) for item in row['unknowns']]
+        if all(isinstance(value,str) and value for value in expected) and actual==[normalize_evidence(value) for value in expected]:return True
+    return not row['unknowns'] and not pieces and text=='[]'
+
+
 def validate_row_review(review,data,standards,require_checks=False):
     rows={r['criterionId']:r for r in data['rows']};criteria={c['id']:c for c in standards['criteria']};errors=[]
     for finding in review['findings']:
@@ -474,6 +499,8 @@ def validate_row_review(review,data,standards,require_checks=False):
         item=None
         if section=='coverage':
             text=row['coverage'] if index is None else None
+        elif section=='unknown' and index is None:
+            text=finding['statement'] if _current_unknown_list(finding['statement'],row,cid) else None
         else:
             items=row['unknowns' if section=='unknown' else 'evidence']
             item=items[index] if type(index) is int and 0<=index<len(items) else None

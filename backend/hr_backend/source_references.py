@@ -47,8 +47,17 @@ def resolve_row_references(data,document,standards):
                     if i is None or not q or q in normalize_evidence(blocks[i]['text']):
                         resolved.append(ref);continue
                     chosen=None;search=_search(ref['quote'])
+                    kind='contiguous_multiblock_quote'
                     if search in _search(blocks[i]['text']):
                         chosen=[{'blockId':blocks[i]['id'],'quote':blocks[i]['text']}]
+                    # PDF readers may emit a standalone bullet before its text.
+                    # Resolve only the immediately adjacent same-page text when
+                    # the entire quotation occurs there; never search elsewhere.
+                    if (not chosen and re.fullmatch(r'[•·●▪◦‣⁃*\-]',blocks[i]['text'].strip())
+                            and i+1<len(blocks) and blocks[i+1].get('page')==blocks[i].get('page')
+                            and search in _search(blocks[i+1]['text'])):
+                        chosen=[{'blockId':blocks[i+1]['id'],'quote':blocks[i+1]['text']}]
+                        kind='adjacent_bullet_quote'
                     for end in range(i+1,min(i+8,len(blocks))):
                         if chosen:break
                         if blocks[end].get('page')!=blocks[i].get('page'):break
@@ -58,7 +67,7 @@ def resolve_row_references(data,document,standards):
                             chosen=[{'blockId':b['id'],'quote':b['text']} for b in blocks[i:end+1] if b['text'].strip()];break
                     if chosen:
                         resolved.extend(chosen)
-                        repairs.append({'kind':'contiguous_multiblock_quote','path':f'rows/{ri}/{section}/{ii}/evidence','original':ref,'resolved':deepcopy(chosen)})
+                        repairs.append({'kind':kind,'path':f'rows/{ri}/{section}/{ii}/evidence','original':ref,'resolved':deepcopy(chosen)})
                     else:resolved.append(ref)
                 item['evidence']=resolved
     return result,repairs

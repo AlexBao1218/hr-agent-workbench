@@ -68,3 +68,17 @@ def test_actual_noncompleted_status_is_not_overwritten_by_existing_error_classif
     assert diagnostic['responseStatus']==expected
     assert diagnostic['incompleteReason'] is None
     assert len(requests)==1 and provider.usage_summary()['unknownUsageCalls']==1
+
+
+def test_balance_error_is_actionable_and_never_auto_retried_or_leaks_body(setup):
+    provider,requests,outputs=setup
+    outputs.append(httpx.Response(402,json={'error':{'message':SENTINEL}}))
+    events=[]
+    with pytest.raises(ProviderError) as caught:
+        Workflow(provider,max_repairs=2)._call('match',{'context':{'runId':'balance-test'}},ChatResult,events.append)
+    assert caught.value.code=='model_balance_exhausted'
+    assert '余额不足' in caught.value.message and '402' in caught.value.message
+    assert len(requests)==1 and provider.usage_summary()['attempts']==1
+    assert SENTINEL not in str(caught.value)+json.dumps(events)
+    diagnostic=next(e['_diagnostic'] for e in events if e.get('_diagnostic',{}).get('kind')=='provider_response')
+    assert diagnostic['httpStatus']==402 and diagnostic['failureKind']=='http_status'
