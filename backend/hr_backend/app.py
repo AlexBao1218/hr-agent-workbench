@@ -646,4 +646,6 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
         return FileResponse(path,media_type='image/png' if path.suffix.lower()=='.png' else 'image/jpeg')
     app.state.resume_hooks={'new_run':new_run,'trace':trace,'finish_run':finish_run,
                             'publish_result':publish_result,'profile_identity':profile_identity,'safe_error':safe_error}
+    from .verified_import import install_verified_import
+    install_verified_import(app,store,provider)
     return app

@@ -359,7 +359,7 @@ def validate_capability_coverage(analysis,index,exclusions=(),grounding=None):
 
 ANGLE_LABELS={'contribution':'个人贡献','validation':'验证方法','limitations':'失败与边界'}
 ANGLE_PATTERNS={
- 'contribution':r'亲自|本人|个人|负责|贡献|产物|实现部分|personally|contribut|responsib|your own|which part',
+ 'contribution':r'亲自|本人|个人|负责|贡献|产物|实现部分|你采取|personally|contribut|responsib|your own|your role|which part',
  'validation':r'验证|评估|核验|测试|指标|对照|validat|evaluat|test|metric|measur',
  'limitations':r'失败|边界|限制|不足|未达|未成功|failure|failed|limit|boundar|unsuccess|did not',
 }

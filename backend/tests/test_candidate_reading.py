@@ -286,6 +286,8 @@ def test_explicit_personal_implementation_is_a_valid_contribution_probe():
     assert not validate_interview_focus(questions,plans,profile)
     questions[0]['question']='在 Alpha 的库存原型中，系统用了什么架构？'
     assert any('verification angle' in e for e in validate_interview_focus(questions,plans,profile))
+    questions[0]['question']='在 Alpha 的库存原型中，请说明你采取的一个具体处理步骤。'
+    assert not validate_interview_focus(questions,plans,profile)
 
 
 def test_exact_reference_resolution_never_invents_candidate_text_or_changes_coverage():
