@@ -41,3 +41,13 @@ def rank(criteria, observations, reviewed=True):
         group=sorted(group,key=lambda c:c['priority']);n=len(group)
         return sum((n-i)*VALUES[by_id[c['id']]['coverage']] for i,c in enumerate(group))/max(1,n*(n+1)/2)
     return grade,round(weighted([c for c in criteria if c['group']=='must'])*100+weighted([c for c in criteria if c['group']=='bonus'])*10,6)
+
+
+def reconciled_grade(criteria,observations,reviewed,recommendation=None):
+    """Do not publish contradictory policy grade and synthesis recommendation."""
+    grade,value=rank(criteria,observations,reviewed)
+    _,reason=grade_reason(criteria,observations,reviewed)
+    conflict=(recommendation=='interview' and grade=='C') or (recommendation=='hold' and grade in ('A','C')) or (recommendation=='do_not_progress' and grade in ('A','B')) or recommendation=='needs_review'
+    if conflict:
+        return 'pending',0,dict(code='pending_review',label='评级待复核',explanation=('模型认为材料需要复核，暂不分级。' if recommendation=='needs_review' else '模型面试建议与现有分级规则不一致，请 HR 复核；未自动覆盖任何规则。'),criterionIds=[])
+    return grade,value,reason

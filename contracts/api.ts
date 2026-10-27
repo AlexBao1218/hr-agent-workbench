@@ -46,6 +46,7 @@ export interface HrReview { decision: HrDecision | null; note: string; updatedAt
 export interface HrReviewUpdate { decision: HrDecision | null; note: string }
 export interface CandidateCard {
   deletionPending?: boolean;
+  recommendation?: 'interview' | 'hold' | 'do_not_progress' | 'needs_review';
   gradeReason?: GradeReason;
   hrReview?: HrReview;
   id: ID; name: string; fictional: boolean; documentId: ID; profile: CandidateProfile | null;
