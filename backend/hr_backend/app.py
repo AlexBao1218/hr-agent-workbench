@@ -163,8 +163,18 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def get_candidate(s,cid):
         if cid not in s['candidates'] or s['candidates'][cid].get('removedAt'): raise ApiFailure('not_found','Candidate not found',404)
         return s['candidates'][cid]
+    def visible_assessment(s,a):
+        # Recover grades hidden by the previous recommendation-conflict rule,
+        # without changing stored assessments or reusing stale evidence.
+        if (a and a.get('grade')=='pending' and a.get('policyVersion')==POLICY_VERSION
+            and a.get('status')=='current' and a.get('reviewed') and s.get('standards')
+            and a.get('standardsVersion')==s['standards']['version']['id']
+            and a.get('hatVersion')==s['hat']['version']['id']):
+            a=copy.deepcopy(a)
+            a['grade'],a['rankValue'],a['gradeReason']=reconciled_grade(s['standards']['criteria'],a['observations'],True,a.get('_recommendation'))
+        return a
     def card(s,c,display=...):
-        a=s['assessments'].get(c.get('assessmentId'))
+        a=visible_assessment(s,s['assessments'].get(c.get('assessmentId')))
         current=a and a['status']=='current' and s['standards'] and a['standardsVersion']==s['standards']['version']['id'] and a['hatVersion']==s['hat']['version']['id']
         profile=copy.deepcopy(c.get('profile'))
         mapping={organization_key(m['organization']):m['group'] for m in s['companyGroupConfig']['mappings']}
@@ -172,7 +182,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
             experience['companyGroup']=mapping.get(organization_key(experience['organization']))
         result=dict(id=c['id'],name=(c.get('profile') or {}).get('name') or c['name'],fictional=c['fictional'],documentId=c['documentId'],profile=profile,stage=c['stage'],grade=a['grade'] if current else 'pending',rank=None,matchSummary=a['summary'] if a else '',keyUnknown=a.get('keyUnknown') if a else None,assessmentStatus=a['status'] if a else 'none',standardsVersion=a['standardsVersion'] if a else None,hatVersion=a['hatVersion'] if a else None,error=c.get('error'))
         if current and a.get('policyVersion')==POLICY_VERSION:result['gradeReason']=reconciled_grade(s['standards']['criteria'],a['observations'],a['reviewed'],a.get('_recommendation'))[2]
-        if current and a.get('_recommendation'):result['recommendation']=a['_recommendation']
+        if current and a.get('_recommendation') and a['_recommendation']!='needs_review':result['recommendation']=a['_recommendation']
         result['hrReview']=copy.deepcopy(c.get('hrReview') or {'decision':None,'note':'','updatedAt':None})
         if c.get('_deletePending'):
             result.update(deletionPending=True,stage='needs_attention',grade='pending',error='删除未完成，请点击卡片上的删除按钮重试。')
@@ -182,7 +192,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def listing(s):
         cards=[card(s,c) for c in s['candidates'].values() if not c.get('removedAt') or c.get('_deletePending')]
         def key(c):
-            a=s['assessments'].get(s['candidates'][c['id']].get('assessmentId'))
+            a=visible_assessment(s,s['assessments'].get(s['candidates'][c['id']].get('assessmentId')))
             return ({'A':0,'B':1,'C':2,'pending':3}[c['grade']],-a['rankValue'] if a else 0,c['id'])
         cards.sort(key=key)
         for i,c in enumerate(cards): c['rank']=i+1 if c['grade']!='pending' else None
@@ -573,7 +583,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def detail(cid:str):
         s=store.read();c=get_candidate(s,cid)
         display=display_projection.get(s,c)
-        result=dict(candidate=card(s,c,display),document=public_document(s['documents'][c['documentId']]),assessment=assessment_wire(s['assessments'].get(c.get('assessmentId')),s['standards']),chat=s['chats'].get(cid,[]),feedback=s['feedback'].get(cid,[]))
+        result=dict(candidate=card(s,c,display),document=public_document(s['documents'][c['documentId']]),assessment=assessment_wire(visible_assessment(s,s['assessments'].get(c.get('assessmentId'))),s['standards']),chat=s['chats'].get(cid,[]),feedback=s['feedback'].get(cid,[]))
         if display is not None:result['display']=display
         return result
     @app.post('/api/candidates/{cid}/analyze')

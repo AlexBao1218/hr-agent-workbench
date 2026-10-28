@@ -21,10 +21,12 @@ def test_invalid_refs_and_unsupported_match_blocked():
     x=deepcopy(BASE);x['observations'][0].update(coverage='unknown',evidence=[])
     with pytest.raises(WorkflowError):validate(__import__('hr_backend.joint_analysis',fromlist=['Final']).Final.model_validate({**x,'summary':FINAL['summary'],'questions':FINAL['questions']}),DOC,STANDARDS,True)
 
-def test_grade_conflict_is_not_silently_published():
+@pytest.mark.parametrize('recommendation',['interview','hold','do_not_progress','needs_review',None])
+def test_recommendation_does_not_hide_evidence_based_grade(recommendation):
     unknown=[{'criterionId':'c1','coverage':'unknown','explanation':'Unknown','evidence':[]}]
-    g,_,reason=reconciled_grade(STANDARDS['criteria'],unknown,True,'interview')
-    assert g=='pending' and reason['code']=='pending_review'
+    g,_,reason=reconciled_grade(STANDARDS['criteria'],unknown,True,recommendation)
+    assert g=='C' and reason['code']=='insufficient_evidence'
+    assert reconciled_grade(STANDARDS['criteria'],unknown,False,recommendation)[0]=='pending'
 
 def test_joint_workflow_calls_flash_then_kimi_and_survives_legacy_review_field():
     from hr_backend.workflow import Workflow
