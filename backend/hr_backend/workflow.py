@@ -220,6 +220,13 @@ class Workflow:
         return result['criteria']
 
     def analyze(self,document,standards,hat,run_id,candidate_id,feedback=None,profile=None,trace_callback=None):
+        if self.provider.mode=='live' and (self.run_settings(run_id) or {}).get('runtime',{}).get('jointAnalysis',False):
+            from .source_analysis import uses_source_protocol
+            if uses_source_protocol(self.run_settings(run_id)):
+                from .source_analysis import analyze
+                return analyze(self,document,standards,hat,run_id,candidate_id,feedback,profile,trace_callback)
+            from .joint_analysis import analyze
+            return analyze(self,document,standards,hat,run_id,candidate_id,feedback,profile,trace_callback)
         if document.get('status')!='ready' or not document.get('blocks'):
             raise WorkflowError('document_unreadable','Document extraction is incomplete. Repair or replace the document before analysis.')
         if not standards['version'].get('confirmedAt') or not hat['version'].get('confirmedAt'):

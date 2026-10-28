@@ -41,3 +41,10 @@ def rank(criteria, observations, reviewed=True):
         group=sorted(group,key=lambda c:c['priority']);n=len(group)
         return sum((n-i)*VALUES[by_id[c['id']]['coverage']] for i,c in enumerate(group))/max(1,n*(n+1)/2)
     return grade,round(weighted([c for c in criteria if c['group']=='must'])*100+weighted([c for c in criteria if c['group']=='bonus'])*10,6)
+
+
+def reconciled_grade(criteria,observations,reviewed,recommendation=None):
+    """Grade reviewed observations by policy independently of model advice."""
+    grade,value=rank(criteria,observations,reviewed)
+    _,reason=grade_reason(criteria,observations,reviewed)
+    return grade,value,reason

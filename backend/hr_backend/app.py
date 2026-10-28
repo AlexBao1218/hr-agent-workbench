@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from .store import Store, uid, now, version, RULES
-from .policy import rank, grade_reason, POLICY_VERSION
+from .policy import rank, grade_reason, reconciled_grade, POLICY_VERSION
 from .agent_settings import snapshot_settings, cv_settings_hash
 from .agent_workbench import install_workbench
 from .diagnostics import write_diagnostic
@@ -163,15 +163,26 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def get_candidate(s,cid):
         if cid not in s['candidates'] or s['candidates'][cid].get('removedAt'): raise ApiFailure('not_found','Candidate not found',404)
         return s['candidates'][cid]
+    def visible_assessment(s,a):
+        # Recover grades hidden by the previous recommendation-conflict rule,
+        # without changing stored assessments or reusing stale evidence.
+        if (a and a.get('grade')=='pending' and a.get('policyVersion')==POLICY_VERSION
+            and a.get('status')=='current' and a.get('reviewed') and s.get('standards')
+            and a.get('standardsVersion')==s['standards']['version']['id']
+            and a.get('hatVersion')==s['hat']['version']['id']):
+            a=copy.deepcopy(a)
+            a['grade'],a['rankValue'],a['gradeReason']=reconciled_grade(s['standards']['criteria'],a['observations'],True,a.get('_recommendation'))
+        return a
     def card(s,c,display=...):
-        a=s['assessments'].get(c.get('assessmentId'))
+        a=visible_assessment(s,s['assessments'].get(c.get('assessmentId')))
         current=a and a['status']=='current' and s['standards'] and a['standardsVersion']==s['standards']['version']['id'] and a['hatVersion']==s['hat']['version']['id']
         profile=copy.deepcopy(c.get('profile'))
         mapping={organization_key(m['organization']):m['group'] for m in s['companyGroupConfig']['mappings']}
         for experience in (profile or {}).get('experiences',[]):
             experience['companyGroup']=mapping.get(organization_key(experience['organization']))
         result=dict(id=c['id'],name=(c.get('profile') or {}).get('name') or c['name'],fictional=c['fictional'],documentId=c['documentId'],profile=profile,stage=c['stage'],grade=a['grade'] if current else 'pending',rank=None,matchSummary=a['summary'] if a else '',keyUnknown=a.get('keyUnknown') if a else None,assessmentStatus=a['status'] if a else 'none',standardsVersion=a['standardsVersion'] if a else None,hatVersion=a['hatVersion'] if a else None,error=c.get('error'))
-        if current and a.get('policyVersion')==POLICY_VERSION:result['gradeReason']=grade_reason(s['standards']['criteria'],a['observations'],a['reviewed'])[1]
+        if current and a.get('policyVersion')==POLICY_VERSION:result['gradeReason']=reconciled_grade(s['standards']['criteria'],a['observations'],a['reviewed'],a.get('_recommendation'))[2]
+        if current and a.get('_recommendation') and a['_recommendation']!='needs_review':result['recommendation']=a['_recommendation']
         result['hrReview']=copy.deepcopy(c.get('hrReview') or {'decision':None,'note':'','updatedAt':None})
         if c.get('_deletePending'):
             result.update(deletionPending=True,stage='needs_attention',grade='pending',error='删除未完成，请点击卡片上的删除按钮重试。')
@@ -181,7 +192,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def listing(s):
         cards=[card(s,c) for c in s['candidates'].values() if not c.get('removedAt') or c.get('_deletePending')]
         def key(c):
-            a=s['assessments'].get(s['candidates'][c['id']].get('assessmentId'))
+            a=visible_assessment(s,s['assessments'].get(s['candidates'][c['id']].get('assessmentId')))
             return ({'A':0,'B':1,'C':2,'pending':3}[c['grade']],-a['rankValue'] if a else 0,c['id'])
         cards.sort(key=key)
         for i,c in enumerate(cards): c['rank']=i+1 if c['grade']!='pending' else None
@@ -271,10 +282,13 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
                     page.update(imageBlobKey=key,imageHash=digest)
         return result
     def publish_result(rid,cid,doc,standards,hat,generations,result,binding_check=None):
-        grade,value=rank(standards['criteria'],result['observations'],result['reviewed'])
-        assessment=dict(id=uid(),candidateId=cid,runId=rid,standardsVersion=standards['version']['id'],hatVersion=hat['version']['id'],mode=provider.mode,status='current' if result['reviewed'] else 'review_required',grade=grade,rankValue=value,summary=result['summary'],keyUnknown=result.get('keyUnknown'),observations=result['observations'],matches=result['matches'],concerns=result['concerns'],questions=result['questions'],reviewed=result['reviewed'],createdAt=now(),policyVersion=POLICY_VERSION,gradeReason=grade_reason(standards['criteria'],result['observations'],result['reviewed'])[1])
+        grade,value,reason=reconciled_grade(standards['criteria'],result['observations'],result['reviewed'],result.get('_recommendation'))
+        assessment=dict(id=uid(),candidateId=cid,runId=rid,standardsVersion=standards['version']['id'],hatVersion=hat['version']['id'],mode=provider.mode,status='current' if result['reviewed'] else 'review_required',grade=grade,rankValue=value,summary=result['summary'],keyUnknown=result.get('keyUnknown'),observations=result['observations'],matches=result['matches'],concerns=result['concerns'],questions=result['questions'],reviewed=result['reviewed'],createdAt=now(),policyVersion=POLICY_VERSION,gradeReason=reason)
+        if result.get('_recommendation'): assessment['_recommendation']=result['_recommendation']
         if result.get('_readingVersion'):
             assessment['_readingVersion']=result['_readingVersion']
+        if result.get('_reviewMode'):
+            assessment['_reviewMode']=result['_reviewMode']
         with store.transaction() as t:
             latest=t['standards']; cc=t['candidates'].get(cid)
             if cc is None:return False
@@ -291,8 +305,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
                     assessment.update(id=uid(),runId=rerank['id'])
                     rerank['_outputAssessmentIds']=[assessment['id']]
                 assessment['standardsVersion']=latest['version']['id']
-                assessment['grade'],assessment['rankValue']=rank(latest['criteria'],assessment['observations'],assessment['reviewed'])
-                assessment['gradeReason']=grade_reason(latest['criteria'],assessment['observations'],assessment['reviewed'])[1]
+                assessment['grade'],assessment['rankValue'],assessment['gradeReason']=reconciled_grade(latest['criteria'],assessment['observations'],assessment['reviewed'],assessment.get('_recommendation'))
                 cc.update(assessmentId=assessment['id'],profile=result['profile'],profileSource=profile_identity(doc,standards,hat),stage='ready' if result['reviewed'] else 'needs_attention',error=None)
                 for f in t['feedback'].get(cid,[]):
                     if f['status']=='rechecking': f['status']='applied' if result['reviewed'] else 'needs_review'
@@ -477,8 +490,8 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
                 old=s['assessments'].get(c.get('assessmentId'))
                 if old and old['status']=='current' and old['standardsVersion']==current['version']['id'] and old['hatVersion']==s['hat']['version']['id']:
                     a=reading_order(old,obj);a.update(id=uid(),runId=run['id'],standardsVersion=obj['version']['id'],createdAt=now())
-                    a['grade'],a['rankValue']=rank(obj['criteria'],a['observations'],a['reviewed'])
-                    a['policyVersion']=POLICY_VERSION;a['gradeReason']=grade_reason(obj['criteria'],a['observations'],a['reviewed'])[1]
+                    a['grade'],a['rankValue'],a['gradeReason']=reconciled_grade(obj['criteria'],a['observations'],a['reviewed'],a.get('_recommendation'))
+                    a['policyVersion']=POLICY_VERSION
                     s['assessments'][a['id']]=a;c['assessmentId']=a['id']
             run.update(status='succeeded',steps=[dict(id=uid(),role='rank',status='succeeded',candidateId=None,standardsVersion=obj['version']['id'],hatVersion=s['hat']['version']['id'],attempt=1,summary=f'{POLICY_VERSION}: priorities changed; validated cached observations reused; zero model calls.',startedAt=now(),completedAt=now())])
             s['activeRunId']=next((r['id'] for r in reversed(list(s['runs'].values())) if r['status'] in ('queued','running')),None)
@@ -572,7 +585,7 @@ def create_app(data_dir=None, provider=None, parser=None, *, recover_interrupted
     def detail(cid:str):
         s=store.read();c=get_candidate(s,cid)
         display=display_projection.get(s,c)
-        result=dict(candidate=card(s,c,display),document=public_document(s['documents'][c['documentId']]),assessment=assessment_wire(s['assessments'].get(c.get('assessmentId')),s['standards']),chat=s['chats'].get(cid,[]),feedback=s['feedback'].get(cid,[]))
+        result=dict(candidate=card(s,c,display),document=public_document(s['documents'][c['documentId']]),assessment=assessment_wire(visible_assessment(s,s['assessments'].get(c.get('assessmentId'))),s['standards']),chat=s['chats'].get(cid,[]),feedback=s['feedback'].get(cid,[]))
         if display is not None:result['display']=display
         return result
     @app.post('/api/candidates/{cid}/analyze')

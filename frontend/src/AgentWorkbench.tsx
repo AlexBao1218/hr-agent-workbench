@@ -76,6 +76,7 @@ export function AgentWorkbench() {
     setState(s);
     setDraft(structuredClone(s.draft));
     setConfirm(false);
+    setRole(current => s.runtime.analysisProtocol?.startsWith("source-") && current === "match" ? "review" : current);
   };
   const load = async () => {
     setBusy(true);
@@ -175,6 +176,11 @@ export function AgentWorkbench() {
     );
   const diff = changes(state.active, draft),
     selected = draft.roles[role];
+  const sourceFlow = state.runtime.analysisProtocol?.startsWith("source-") ?? false;
+  const jointFlow = sourceFlow || state.runtime.analysisProtocol === "joint-v1";
+  const flowRoles: Role[] = sourceFlow ? ["jd", "cv", "review"] : jointFlow ? ["jd", "cv", "match", "review"] : roles;
+  const flowNames = { ...names, ...(sourceFlow ? { review: "原文综合判断" } : jointFlow ? { review: "复核与综合" } : {}) };
+  const flowNotes = { ...notes, ...(sourceFlow ? { cv: "履历展示信息 · 可复用", review: "完整原文 → 判断、摘要与三题" } : jointFlow ? { review: "草稿 + 原文 → 最终判断与三题" } : {}) };
   const outputLimit = Math.min(65536, state.runtime.maxOutputTokens);
   const outputLimitMessage = `超过服务器输出上限（${outputLimit} token），这是服务器限制，不是模型上限。`;
   const selectedRules = state.lockedRulesByRole?.[role] ?? state.lockedRules;
@@ -215,7 +221,7 @@ export function AgentWorkbench() {
           当前生效 v{state.active.version.number}
           <small>
             {state.runtime.mode === "fixture" ? "测试模式" : "实际模型模式"} ·{" "}
-            {state.runtime.model || "模型未配置"}
+            {sourceFlow ? `判断：${state.active.roles.review.model || state.runtime.model || "未配置"}` : state.runtime.model || "模型未配置"}
           </small>
         </span>
       </header>
@@ -256,8 +262,8 @@ export function AgentWorkbench() {
       )}
       {tab === "flow" && (
         <>
-          <div className="aw-flow" aria-label="五阶段固定流程">
-            {roles.map((r, i) => (
+          <div className="aw-flow" aria-label={sourceFlow ? "原文综合分析流程" : jointFlow ? "联合分析流程" : "五阶段固定流程"}>
+            {flowRoles.map((r, i) => (
               <div className="aw-node-wrap" key={r}>
                 <button
                   className={`aw-node ${role === r ? "selected" : ""}`}
@@ -267,10 +273,10 @@ export function AgentWorkbench() {
                   <small>
                     0{i + 1} / {r.toUpperCase()}
                   </small>
-                  <strong>{names[r]}</strong>
-                  <span>{notes[r]}</span>
+                  <strong>{flowNames[r]}</strong>
+                  <span>{flowNotes[r]}</span>
                 </button>
-                {i < 4 && (
+                {i < flowRoles.length - 1 && (
                   <span className="aw-arrow" aria-hidden="true">
                     →
                   </span>
@@ -279,6 +285,7 @@ export function AgentWorkbench() {
             ))}
           </div>
           <div className="aw-flow-notes">
+            {jointFlow ? <span>{sourceFlow ? "不生成初筛草稿；从原文直接判断" : "Flash 草稿 → Kimi 复核综合"} · 无自动重试</span> : <>
             <span>
               ↶ 复核未通过 → 匹配修复：最多 {draft.flow.matchRepairs} 次
             </span>
@@ -286,12 +293,13 @@ export function AgentWorkbench() {
               ↶ 问题校验未通过 → 面试问题修复：最多{" "}
               {draft.flow.interviewRepairs} 次
             </span>
+            </>}
             <span>通过校验 → 代码分级 → 保存建议</span>
           </div>
           <p className="aw-muted">
-            固定五阶段流程；JD 需经 HR
-            确认，匹配依赖确认标准与已整理简历。可调整有限重试，不支持任意新增节点或拖动连线。
+            {sourceFlow ? "当前生效：JD 预先确认；Flash 整理履历展示信息，分析者只读原文，不接收旧评价。匹配、疑点与三题在同一次综合中完成，另做来源和结构校验。新简历最多两次调用，复用有效履历时一次；属于自检，不是独立模型复核。" : jointFlow ? "当前生效：JD 预先确认；履历可复用，Flash 与 Kimi 完成两阶段判断；面试问题包含在最终综合中。" : "固定五阶段流程；JD 需经 HR 确认，匹配依赖确认标准与已整理简历。可调整有限重试，不支持任意新增节点或拖动连线。"}
           </p>
+          {jointFlow && <p className="aw-muted">下方为可编辑草稿，可能来自历史版本；结构化输出要求展示当前生效协议。初筛草稿与独立面试节点的历史设定仍保留，但跳过的节点不调用模型。</p>}
           <div className="aw-layout">
             <form
               className="aw-panel"
@@ -310,7 +318,7 @@ export function AgentWorkbench() {
               }}
             >
               <div className="aw-panel-heading">
-                <h3>{names[role]} · 角色设定</h3>
+                <h3>{flowNames[role]} · 角色设定</h3>
                 <button
                   type="button"
                   disabled={busy}
@@ -328,8 +336,13 @@ export function AgentWorkbench() {
                   恢复此角色默认值
                 </button>
               </div>
+              {!same(state.active.roles[role], selected) && <details>
+                <summary>查看当前生效任务与参数 · v{state.active.version.number}</summary>
+                <p className="aw-muted">以下是实际用于新运行的版本；下方编辑框保留了原有草稿。</p>
+                <pre>{json(state.active.roles[role])}</pre>
+              </details>}
               <label>
-                系统提示与角色任务
+                草稿：系统提示与角色任务
                 <textarea
                   disabled={busy}
                   aria-label="系统提示与角色任务"
@@ -421,7 +434,7 @@ export function AgentWorkbench() {
               <details>
                 <summary>强制来源与标准护栏 · {names[role]} · 只读</summary>
                 <p className="aw-muted">
-                  共同护栏适用于所有角色；项目领域、既往经历与核验范围附加规则仅用于逐项匹配和复核证据。
+                  {jointFlow ? "共同来源护栏与上方角色任务共同生效；跳过的节点不会发送提示词。" : "共同护栏适用于所有角色；项目领域、既往经历与核验范围附加规则仅用于逐项匹配和复核证据。"}
                 </p>
                 <pre>{selectedRules}</pre>
               </details>
@@ -459,7 +472,7 @@ export function AgentWorkbench() {
                 <label key={k}>
                   {k === "matchRepairs" ? "匹配修复次数" : "面试问题修复次数"}
                   <select
-                    disabled={busy}
+                    disabled={busy || jointFlow}
                     value={draft.flow[k]}
                     onChange={(e) => {
                       setDraft({
@@ -477,7 +490,7 @@ export function AgentWorkbench() {
                   </select>
                 </label>
               ))}
-              <p>修复用尽仍不通过时，保留失败信息，不发布未经校验的结论。</p>
+              <p>{jointFlow ? "当前流程不使用自动修复；失败保留原始诊断，不追加付费调用。" : "修复用尽仍不通过时，保留失败信息，不发布未经校验的结论。"}</p>
               <h3>激活新版本</h3>
               <p>
                 与当前版本相比，{diff.length} 项修改。请先保存，再核对差异。
@@ -720,7 +733,7 @@ export function AgentWorkbench() {
           <article className="aw-panel">
             <h3>仍然存在的限制</h3>
             <p>
-              五个角色不代表五个独立模型。同一模型担任复核时可能重复原判断的偏差；复核也不等于事实已被外部证实。
+              {sourceFlow ? "当前由一个分析者综合原文并自检，没有独立模型复核。来源字符匹配不能证明概括一定正确，仍需HR回看重要原文。" : "五个角色不代表五个独立模型。同一模型担任复核时可能重复原判断的偏差；复核也不等于事实已被外部证实。"}
             </p>
             <p>
               结构与引用正确不保证概括全面。OCR、模糊履历和过长输入仍会影响结果；需要

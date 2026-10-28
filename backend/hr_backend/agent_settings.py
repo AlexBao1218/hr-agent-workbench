@@ -18,7 +18,7 @@ class RoleSettings(StrictModel):
     reasoningEffort: Literal['none', 'low', 'medium', 'high']
     maxOutputTokens: int = Field(ge=128, le=65536)
     temperature: float | None = Field(ge=0, le=2)
-    timeoutSeconds: int = Field(ge=1, le=300)
+    timeoutSeconds: int = Field(ge=1, le=900)
 
     @field_validator('systemPrompt')
     @classmethod
@@ -67,7 +67,7 @@ def runtime_settings(provider):
                 maxOutputTokens=min(getattr(provider, 'max_tokens', 12000), 65536),
                 maxInputBytes=getattr(provider, 'max_input_bytes', None),
                 maxCalls=getattr(provider, 'max_calls', None),
-                timeoutSeconds=min(getattr(provider, 'timeout', 90), 300))
+                timeoutSeconds=min(getattr(provider, 'timeout', 90), 900))
 
 
 def locked_rules(role=None):
@@ -98,6 +98,49 @@ def initialize_settings(state, provider):
     state.setdefault('agentSettingsHistory', [deepcopy(state['agentSettings'])])
     state.setdefault('agentSettingsDraft', deepcopy(state['agentSettings']))
     state.setdefault('agentSettingsDraftRevision', uid())
+    # Explicit hosted opt-in for the tested source-first protocol. Never mutate
+    # the user's draft or re-run candidates as a side effect of deployment.
+    if type(provider).__name__ == 'DeepSeekProvider' and provider.mode == 'live' and os.getenv('HR_ANALYSIS_PROTOCOL') == 'source-v4':
+        marker = 'joint-source-v4 deployment'
+        if not any(item.get('version', {}).get('confirmedBy') == marker for item in state['agentSettingsHistory']):
+            if not os.getenv('MOONSHOT_API_KEY'):
+                raise ValueError('source-v4 requires MOONSHOT_API_KEY on the server.')
+            caps = runtime_settings(provider)
+            if caps['maxOutputTokens'] < 20000 or caps['timeoutSeconds'] < 600:
+                raise ValueError('source-v4 requires HR_MODEL_MAX_OUTPUT_TOKENS >= 20000 and HR_MODEL_TIMEOUT_SECONDS >= 600.')
+            from .source_analysis import configured_roles
+            active = deepcopy(state['agentSettings'])
+            active['roles'] = configured_roles(active['roles'])
+            for role in ('jd', 'cv'):
+                active['roles'][role].update(model='deepseek-flash', reasoningEffort='none', temperature=0.1)
+            active['roles']['review'].update(model='kimi-k3.1-pro', reasoningEffort='low',
+                                             maxOutputTokens=20000, temperature=None, timeoutSeconds=600)
+            for settings in active['roles'].values():
+                settings['maxOutputTokens'] = min(settings['maxOutputTokens'], caps['maxOutputTokens'])
+                settings['timeoutSeconds'] = min(settings['timeoutSeconds'], caps['timeoutSeconds'])
+            active['flow'].update(matchRepairs=0, interviewRepairs=0)
+            active['version'] = version(state['agentSettings']['version']['number'] + 1, marker)
+            state['agentSettings'] = active
+            state['agentSettingsHistory'].append(deepcopy(active))
+        return
+    # Explicit opt-in deployment migration. Preserve any existing draft and history.
+    if type(provider).__name__ == 'DeepSeekProvider' and provider.mode == 'live' and os.getenv('HR_JOINT_ANALYSIS') == '1':
+        marker='joint-flash-kimi-v1 deployment'
+        if not any(item.get('version',{}).get('confirmedBy')==marker for item in state['agentSettingsHistory']):
+            if not os.getenv('MOONSHOT_API_KEY'):
+                raise ValueError('Joint analysis requires MOONSHOT_API_KEY on the server.')
+            if runtime_settings(provider)['maxOutputTokens']<20000 or runtime_settings(provider)['timeoutSeconds']<600:
+                raise ValueError('Joint analysis requires HR_MODEL_MAX_OUTPUT_TOKENS >= 20000 and HR_MODEL_TIMEOUT_SECONDS >= 600.')
+            from .joint_analysis import DRAFT, REVIEW
+            active=deepcopy(state['agentSettings'])
+            for role in ('jd','cv'):
+                active['roles'][role].update(model='deepseek-flash',reasoningEffort='none',temperature=0.1)
+            active['roles']['match'].update(systemPrompt='joint-flash-kimi-v1\n'+DRAFT,model='deepseek-flash',reasoningEffort='none',maxOutputTokens=12000,temperature=0.1,timeoutSeconds=300)
+            active['roles']['review'].update(systemPrompt='joint-flash-kimi-v1\n'+REVIEW,model='kimi-k3.1-pro',reasoningEffort='low',maxOutputTokens=20000,temperature=None,timeoutSeconds=600)
+            active['flow'].update(matchRepairs=0,interviewRepairs=0)
+            active['version']=version(state['agentSettings']['version']['number']+1,marker)
+            state['agentSettings']=active
+            state['agentSettingsHistory'].append(deepcopy(active))
 
 
 def validate_caps(config, provider):
@@ -110,9 +153,14 @@ def validate_caps(config, provider):
 def snapshot_settings(state, provider):
     initialize_settings(state, provider)
     snapshot = deepcopy(state['agentSettings'])
-    snapshot['effectivePrompts'] = {role: locked_rules(role)+'Active role: '+role+'\n'+snapshot['roles'][role]['systemPrompt'] for role in ROLES}
+    joint = type(provider).__name__ == 'DeepSeekProvider' and provider.mode == 'live' and (os.getenv('HR_JOINT_ANALYSIS') == '1' or os.getenv('HR_ANALYSIS_PROTOCOL') == 'source-v4')
+    snapshot['effectivePrompts'] = {role: (prompts.COMMON+'\n' if joint and role in ('match','review') else locked_rules(role))+'Active role: '+role+'\n'+snapshot['roles'][role]['systemPrompt'] for role in ROLES}
     snapshot['promptHashes'] = {role: hashlib.sha256(text.encode()).hexdigest() for role, text in snapshot['effectivePrompts'].items()}
     snapshot['runtime'] = runtime_settings(provider)
+    snapshot['runtime']['jointAnalysis'] = joint
+    from .source_analysis import source_protocol
+    source = source_protocol(snapshot)
+    snapshot['runtime']['analysisProtocol'] = (source.removeprefix('joint-') if source else 'joint-v1') if joint else 'criterion-rows'
     return snapshot
 
 

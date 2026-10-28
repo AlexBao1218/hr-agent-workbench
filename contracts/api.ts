@@ -46,6 +46,7 @@ export interface HrReview { decision: HrDecision | null; note: string; updatedAt
 export interface HrReviewUpdate { decision: HrDecision | null; note: string }
 export interface CandidateCard {
   deletionPending?: boolean;
+  recommendation?: 'interview' | 'hold' | 'do_not_progress' | 'needs_review';
   gradeReason?: GradeReason;
   hrReview?: HrReview;
   id: ID; name: string; fictional: boolean; documentId: ID; profile: CandidateProfile | null;
@@ -85,7 +86,7 @@ export interface GroupMoveResult { standards: Standards; runId: ID | null }
 export type AgentRole = 'jd' | 'cv' | 'match' | 'review' | 'interview';
 export interface AgentRoleSettings { systemPrompt:string; model:string|null; reasoningEffort:'none'|'low'|'medium'|'high'; maxOutputTokens:number; temperature:number|null; timeoutSeconds:number }
 export interface AgentConfig { version:Version; roles:Record<AgentRole,AgentRoleSettings>; flow:{matchRepairs:number;interviewRepairs:number} }
-export interface AgentRuntime { model:string|null;provider:string;mode:Mode;maxOutputTokens:number;maxInputBytes:number|null;maxCalls:number|null;timeoutSeconds:number }
+export interface AgentRuntime { model:string|null;provider:string;mode:Mode;maxOutputTokens:number;maxInputBytes:number|null;maxCalls:number|null;timeoutSeconds:number; jointAnalysis?:boolean; analysisProtocol?:'source-v2'|'source-v3'|'source-v4'|'joint-v1'|'criterion-rows' }
 export interface AgentSnapshot extends AgentConfig { effectivePrompts:Record<AgentRole,string>;promptHashes:Record<AgentRole,string>;runtime:AgentRuntime }
 export interface AgentWorkbench { active:AgentConfig;draft:AgentConfig;draftRevision:string;history:AgentConfig[];defaults:AgentConfig;lockedRules:string;lockedRulesByRole?:Record<AgentRole,string>;schemas:Record<AgentRole,unknown>;runtime:AgentRuntime }
 export interface AgentRunSummary { id:ID;status:Run['status'];createdAt:string;candidateNames:string[];settingsVersion:string|null;hasSnapshot:boolean }

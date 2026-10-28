@@ -2530,7 +2530,7 @@ select:disabled {
 .analysis-point-body { min-width: 0; }
 .detail-view .analysis-item h3 { font-size: 16px; font-weight: 600; line-height: 25px; margin: 0 0 8px; }
 .detail-view .analysis-item .question-text { font-weight: 400; }
-.detail-view .analysis-item .point-explanation { font-size: 14px; line-height: 1.85; }
+.detail-view .analysis-item .point-explanation { font-size: 14px; line-height: 1.85; white-space: pre-line; }
 .detail-view .analysis-item :is(.requirement-disclosure, .question-purpose) { margin-top: 11px; }
 .detail-view .analysis-item summary { list-style: none; }
 .detail-view .analysis-item summary::-webkit-details-marker { display: none; }

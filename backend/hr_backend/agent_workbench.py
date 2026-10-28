@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from fastapi.responses import JSONResponse
 from .agent_settings import (Activate, DraftUpdate, Restore, ROLES, default_settings,
-    initialize_settings, locked_rules, runtime_settings, validate_caps)
+    initialize_settings, locked_rules, runtime_settings, validate_caps, snapshot_settings)
 from .schemas import JDResult, CandidateProfile, CriterionRowsResult, CriterionRowsReview, InterviewResult
 from .store import uid, version
 
@@ -28,11 +28,23 @@ def error(code, message, status):
 
 
 def workbench_view(state, provider):
+    snapshot = snapshot_settings(deepcopy(state), provider)
+    schemas = {role: schema.model_json_schema() for role, schema in SCHEMAS.items()}
+    rules = {role: locked_rules(role) for role in ROLES}
+    if snapshot['runtime'].get('jointAnalysis'):
+        from .prompts import COMMON
+        from .joint_analysis import Brief, Reviewed
+        rules.update(match=COMMON+'\n', review=COMMON+'\n')
+        schemas.update(match=Brief.model_json_schema(), review=Reviewed.model_json_schema())
+        if snapshot['runtime']['analysisProtocol'] in ('source-v2', 'source-v3', 'source-v4'):
+            from .source_analysis import report_schema
+            schemas['review'] = report_schema(snapshot).model_json_schema()
+            schemas['match'] = {'description': 'Skipped: no screening draft in source synthesis.', 'x-execution': 'skipped'}
+        schemas['interview'] = {'description': 'Questions are generated in the synthesis call.', 'x-execution': 'included-in-review'}
     return deepcopy(dict(active=state['agentSettings'], draft=state['agentSettingsDraft'],
         draftRevision=state['agentSettingsDraftRevision'], history=state['agentSettingsHistory'],
-        defaults=default_settings(provider), lockedRules=locked_rules(), lockedRulesByRole={role:locked_rules(role) for role in ROLES},
-        schemas={role: schema.model_json_schema() for role, schema in SCHEMAS.items()},
-        runtime=runtime_settings(provider)))
+        defaults=default_settings(provider), lockedRules=locked_rules(), lockedRulesByRole=rules,
+        schemas=schemas, runtime=snapshot['runtime']))
 
 
 def read_artifacts(root, run, diagnostic_reader=None):

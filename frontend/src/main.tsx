@@ -499,7 +499,7 @@ function cardLabel(value: string) {
   return output.replace(/\s+/g, " ").trim() || value;
 }
 function Card({ c, open, run, onDeleted }: { c: CandidateCard; open: () => void; run: Run | null; onDeleted: () => Promise<void> }) {
-  const gradeReason = c.grade !== "pending" && c.assessmentStatus === "current" ? c.gradeReason : undefined;
+  const gradeReason = c.assessmentStatus === "current" ? c.gradeReason : undefined;
   const internships =
     c.profile?.experiences
       .filter((e) => e.kind === "internship")
@@ -537,7 +537,7 @@ function Card({ c, open, run, onDeleted }: { c: CandidateCard; open: () => void;
               : ""}</span>
           <div className="card-match-status">
             {!c.deletionPending && <CandidateRunProgress candidate={c} run={run} />}
-            {gradeReason && <span className="card-grade-reason" data-reason={gradeReason.code} title={gradeReason.explanation} aria-label={`${c.grade} 级：${gradeReason.label}。${gradeReason.explanation}`}>{c.grade} · {gradeReason.label}</span>}
+            {gradeReason && <span className="card-grade-reason" data-reason={gradeReason.code} title={gradeReason.explanation} aria-label={`${c.grade === "pending" ? "评级待复核" : `${c.grade} 级`}：${gradeReason.label}。${gradeReason.explanation}`}>{c.grade === "pending" ? gradeReason.label : `${c.grade} · ${gradeReason.label}`}</span>}
           </div>
         </div>
         <div className="card-match-copy"><p className="card-summary">{c.deletionPending ? "删除未完成，请点击卡片上的删除按钮重试。" : c.stage === 'failed' || c.stage === 'needs_attention' ? (c.assessmentStatus === 'stale' ? '新标准下的分析尚未完成，上一版结果待更新。' : '分析尚未完成，请查看运行进度。') : c.error || c.display?.summary || (c.matchSummary.startsWith('相关证据：') ? c.matchSummary.slice('相关证据：'.length) : c.matchSummary) || stageLabels[c.stage]}</p></div>
@@ -1241,9 +1241,9 @@ function Detail({
         <div className="detail-resume">
           <div className="identity-topline">
             <h1>{c.name}</h1>
-            <div className="identity-rating"><span>评级</span><strong>{c.grade === "pending" ? "待处理" : c.grade}</strong>{c.grade !== "pending" && c.assessmentStatus === "current" && c.gradeReason && <span className="identity-grade-reason" data-reason={c.gradeReason.code}>{c.gradeReason.label}</span>}</div>
+            <div className="identity-rating"><span>{c.recommendation ? ({interview:"建议面试",hold:"可待确认",do_not_progress:"暂不推进",needs_review:"需要复核"} as const)[c.recommendation] : "评级"}</span><strong>{c.grade === "pending" ? (c.stage === "ready" ? "评级待复核" : "待处理") : c.grade}</strong>{c.grade !== "pending" && c.assessmentStatus === "current" && c.gradeReason && <span className="identity-grade-reason" data-reason={c.gradeReason.code}>{c.gradeReason.label}</span>}</div>
           </div>
-          {c.grade !== "pending" && c.assessmentStatus === "current" && c.gradeReason && <p className="grade-explanation">{c.gradeReason.explanation}</p>}
+          {c.assessmentStatus === "current" && c.gradeReason && <p className="grade-explanation">{c.gradeReason.explanation}</p>}
           {c.profile?.education.map((education, i) => (
             <div className="identity-fields" key={i}>
               <div><span className="identity-label">学校</span><strong>{education.school}</strong></div>

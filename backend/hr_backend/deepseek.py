@@ -36,7 +36,7 @@ class DeepSeekProvider(OpenAIProvider):
         self.max_tokens=integer_setting('HR_MODEL_MAX_OUTPUT_TOKENS',6000,128,65536)
         self.max_input_bytes=integer_setting('HR_MODEL_MAX_INPUT_BYTES',80000,1000,1000000)
         self.max_calls=integer_setting('HR_MODEL_MAX_CALLS',6,1,10000)
-        self.timeout=integer_setting('HR_MODEL_TIMEOUT_SECONDS',90,1,300)
+        self.timeout=integer_setting('HR_MODEL_TIMEOUT_SECONDS',90,1,900)
         self.reasoning_effort=reasoning_setting('HR_MODEL_REASONING_EFFORT','none')
         self.role_reasoning={role:reasoning_setting(f'HR_MODEL_{role.upper()}_REASONING_EFFORT',self.reasoning_effort) for role in ('match','review')}
         self.usage_path=Path(os.getenv('HR_DATA_DIR',Path(__file__).resolve().parents[2]/'runtime'))/'model-usage.sqlite3'
@@ -106,6 +106,9 @@ class DeepSeekProvider(OpenAIProvider):
         return dict(zip(('attempts','inputTokens','outputTokens','cacheHitTokens','cacheMissTokens','unknownUsageCalls'),row))
 
     def generate(self,role,payload,schema):
+        if (payload.get('_agentRequest',{}).get('model') or '').startswith('kimi-'):
+            from .kimi import generate_kimi
+            return generate_kimi(self,role,payload,schema)
         if role not in ('jd','cv','match','review','interview','chat','standards_chat'):raise ProviderError('unsupported_role','Unsupported workflow role.')
         if not self.configured:raise ProviderError('provider_unconfigured','Configure the server API key and model before live inference.')
         arguments=self.request_arguments(role,payload,schema)
